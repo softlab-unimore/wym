@@ -43,11 +43,11 @@ class Routine():
         self.device = device
         simplefilter(action='ignore', category=FutureWarning)
         simplefilter(action='ignore')
-        pd.options.display.float_format = '{:.2f}'.format
+        pd.options.display.float_format = '{:.4f}'.format
         self.softlab_path = os.path.join(softlab_path)
         self.softlab_path = os.path.join(softlab_path)
-        self.reset_files = reset_files  # @param {type:"boolean"}
-        self.reset_networks = reset_networks  # @param {type:"boolean"}
+        self.reset_files = reset_files  # @ param {type:"boolean"}
+        self.reset_networks = reset_networks  # @ param {type:"boolean"}
         self.dataset_name = dataset_name
         self.model_name = model_name
         if dataset_path == None:
@@ -83,27 +83,44 @@ class Routine():
         right_ids = np.unique(np.concatenate(right_ids))
         self.table_A[~self.table_A.id.isin(left_ids)] = None
         self.table_B[~self.table_B.id.isin(right_ids)] = None
-
+        self.cols = np.setdiff1d(self.table_A.columns, ['id'])
         if clean_special_char:
             spec_chars = ["!", '"', "#", "%", "&", "'", "(", ")",
-                          "*", "+", ",", "-", ".", "/", ":", ";", "<",
+                          "*", "+", ",", "-", "/", ":", ";", "<",
                           "=", ">", "?", "@", "[", "\\", "]", "^", "_",
                           "`", "{", "|", "}", "~", "–", "´"]
 
             for col in np.setdiff1d(self.table_A.columns, ['id']):
-                self.table_A[col] = self.table_A[col].astype(str).\
-                                        str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8') + ' '
-                self.table_B[col] = self.table_B[col].astype(str).\
-                                        str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8') + ' '
-
+                self.table_A[col] = self.table_A[col].astype(str). \
+                                        str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode(
+                    'utf-8') + ' '
+                self.table_B[col] = self.table_B[col].astype(str). \
+                                        str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode(
+                    'utf-8') + ' '
                 for char in spec_chars:
-                    self.table_A[col] = self.table_A[col].str.replace(' ' + char + ' ', ' ')
-                    self.table_B[col] = self.table_B[col].str.replace(' ' + char + ' ', ' ')
+                    self.table_A[col] = self.table_A[col].str.replace(' \\' + char + ' ', ' ')
+                    self.table_B[col] = self.table_B[col].str.replace(' \\' + char + ' ', ' ')
 
                 self.table_A[col] = self.table_A[col].str.replace('-', ' ')
                 self.table_B[col] = self.table_B[col].str.replace('-', ' ')
                 self.table_A[col] = self.table_A[col].str.split().str.join(" ")
                 self.table_B[col] = self.table_B[col].str.split().str.join(" ")
+
+        self.table_A = self.table_A.replace('None', np.nan).replace('nan', np.nan)
+        self.table_B = self.table_B.replace('None', np.nan).replace('nan', np.nan)
+        self.words_divided = {}
+        for name, df in zip(['table_A', 'table_B'], [self.table_A, self.table_B]):
+            tmp_res = []
+            for i in tqdm(range(df.shape[0])):
+                el = df.iloc[[i]]
+                el_words = {}
+                for col in self.cols:
+                    if el[col].notna().values[0]:
+                        el_words[col] = str(el[col].values[0]).split()
+                    else:
+                        el_words[col] = []
+                tmp_res.append(el_words.copy())
+            self.words_divided[name] = tmp_res
 
     def generate_df_embedding(self, chunk_size=1000):
         self.embeddings = {}
@@ -134,7 +151,7 @@ class Routine():
                 with open(tmp_path, 'wb') as file:
                     pickle.dump(words, file)
 
-    def compute_word_pair(self, use_schema=False):
+    def compute_word_pair(self, use_schema=True):
         we = WordEmbedding(device=self.device)
         words_pairs_dict, emb_pairs_dict = {}, {}
         try:
@@ -150,7 +167,8 @@ class Routine():
         except Exception as e:
             print(e)
 
-            word_pair_generator = WordPairGenerator(self.words, self.embeddings, df=self.test, use_schema=use_schema)
+            word_pair_generator = WordPairGenerator(self.words, self.embeddings, self.words_divided, df=self.test,
+                                                    use_schema=use_schema)
             for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
                 word_pairs, emb_pairs = word_pair_generator.process_df(df)
                 tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
@@ -166,7 +184,7 @@ class Routine():
         self.emb_pairs_dict = emb_pairs_dict
         return words_pairs_dict, emb_pairs_dict
 
-    def net_train(self):
+    def net_train(self, num_epochs=100, lr=0.00001, batch_size=128):
         word_pairs = self.words_pairs_dict['train'].copy()
         emb_pairs = self.emb_pairs_dict['train']
         data_loader = DatasetAccoppiate(word_pairs, emb_pairs)
@@ -180,12 +198,11 @@ class Routine():
                                                   map_location=torch.device(device)))
         except Exception as e:
             print(e)
-            batch_size = 128
             net = NetAccoppiate()
             net.to(device)
             criterion = nn.BCELoss().to(device)
             # optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=.9)
-            optimizer = optim.Adam(net.parameters(), lr=0.00001)
+            optimizer = optim.Adam(net.parameters(), lr=lr)
 
             train_dataset = data_loader
             valid_dataset = copy.deepcopy(train_dataset)
@@ -196,7 +213,8 @@ class Routine():
 
             best_model, score_history, last_model = train_model(net,
                                                                 dataloaders_dict, criterion, optimizer,
-                                                                nn.MSELoss().to(device), num_epochs=150, device=device)
+                                                                nn.MSELoss().to(device), num_epochs=num_epochs,
+                                                                device=device)
             # optimizer = optim.SGD(net.parameters(), lr=0.0001, momentum=.9)
             # best_model, score_history, last_model = train_model(net,dataloaders_dict, criterion, optimizer,nn.MSELoss().to(device), num_epochs=150, device=device)
 
