@@ -17,7 +17,8 @@ class EMFeatures:
 
 class WordPairGenerator(EMFeatures):
 
-    def __init__(self, words, embeddings, words_divided, use_schema=True, unpair_threshold=0.55,
+
+    def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=0.55,
                  duplicate_threshold=.75, **kwargs):
         super().__init__(**kwargs)
         self.words = words
@@ -26,31 +27,55 @@ class WordPairGenerator(EMFeatures):
         self.unpair_threshold = unpair_threshold
         self.duplicate_threshold = duplicate_threshold
         self.words_divided = words_divided
-        self.zero_emb = torch.stack([torch.zeros_like(self.embeddings['table_A'][0][0])])
+        if embeddings is not None:
+            i=0
+            while len(self.embeddings['table_A'][i]) == 0:
+                i+=1
+            self.zero_emb = torch.stack([torch.zeros_like(self.embeddings['table_A'][i][0])])
         self.word_pair_empty = {'left_word': [], 'right_word': [], 'cos_sim': [], 'left_attribute': [],
                                 'right_attribute': []}
 
-    def process_df(self, df):
-        word_dict_list = []
 
+
+    def get_word_pairs(self, df, data_dict):
+        word_dict_list = []
         embedding_list = []
-        for i in tqdm(range(df.shape[0])):
+        for i, emb1, emb2, words1, words2, left_words_map, right_words_map in tqdm(zip(range(df.shape[0]),
+                            data_dict['left_words'], data_dict['left_emb'], data_dict['left_word_map'],
+                            data_dict['right_words'], data_dict['right_emb'], data_dict['right_word_map'])):
             gc.collect()
             torch.cuda.empty_cache()
-            tmp_word, tmp_emb = self.generate_word_embedding_pairs(df.iloc[[i]])
+            el = df.iloc[[i]]
+            tmp_word, tmp_emb = self.embedding_pairs(el,  emb1, emb2, words1, words2, left_words_map, right_words_map)
+            n_pairs = len(tmp_word['left_word'])
+            tmp_word['label'] = [el.label.values[0]] * n_pairs
+            tmp_word['id'] = [el.id.values[0]] * n_pairs
             word_dict_list.append(tmp_word)
             embedding_list.append(tmp_emb)
+
         keys = word_dict_list[0].keys()
         ret_dict = {key: np.concatenate([x[key] for x in word_dict_list]) for key in keys}
         return ret_dict, torch.cat(embedding_list)
 
-    def generate_word_embedding_pairs(self, el):
-        words_pairs_dict, emb_pairs = self.embedding_pairs(el)
-        n_pairs = len(words_pairs_dict['left_word'])
-        words_pairs_dict['label'] = [el.label.values[0]] * n_pairs
-        words_pairs_dict['id'] = [el.id.values[0]] * n_pairs
-        # total_emb_pairs = torch.cat(total_emb_pairs)
-        return words_pairs_dict, emb_pairs
+    def process_df(self, df):
+        word_dict_list = []
+        embedding_list = []
+        for i in tqdm(range(df.shape[0])):
+            if i% 500 ==0:
+                gc.collect()
+                torch.cuda.empty_cache()
+            el = df.iloc[[i]]
+            tmp_word, tmp_emb = self.embedding_pairs(el)
+            n_pairs = len(tmp_word['left_word'])
+            tmp_word['label'] = [el.label.values[0]] * n_pairs
+            tmp_word['id'] = [el.id.values[0]] * n_pairs
+            word_dict_list.append(tmp_word)
+            embedding_list.append(tmp_emb)
+
+        keys = word_dict_list[0].keys()
+        ret_dict = {key: np.concatenate([x[key] for x in word_dict_list]) for key in keys}
+        return ret_dict, torch.cat(embedding_list)
+
 
     @staticmethod
     def cos_sim_set(emb1, emb2):
@@ -190,89 +215,23 @@ class WordPairGenerator(EMFeatures):
         else:
             return word_pair, ret_emb
 
-    def embedding_pairs(self, el):
-        emb1 = self.embeddings['table_A'][el.left_id.values[0]]
-        emb2 = self.embeddings['table_B'][el.right_id.values[0]]
-        words1 = self.words['table_A'][el.left_id.values[0]]
-        words2 = self.words['table_B'][el.right_id.values[0]]
-        left_words = self.words_divided['table_A'][el.left_id.values[0]]
-        right_words = self.words_divided['table_B'][el.right_id.values[0]]
+    def embedding_pairs(self, el, emb1=None, emb2=None, words1=None, words2=None, left_words_map=None, right_words_map=None):
+        if emb1 is None or emb2 is None or words1 is None or words2 is None:
+            emb1 = self.embeddings['table_A'][el.left_id.values[0]]
+            emb2 = self.embeddings['table_B'][el.right_id.values[0]]
+            words1 = self.words['table_A'][el.left_id.values[0]]
+            words2 = self.words['table_B'][el.right_id.values[0]]
+            left_words_map = self.words_divided['table_A'][el.left_id.values[0]]
+            right_words_map = self.words_divided['table_B'][el.right_id.values[0]]
+
+
         if self.use_schema:
-            word_pair = self.word_pair_empty.copy()
             #assert len(words1) == np.sum([len(x) for x in left_words.values() if x != ['']]), [words1, left_words]
-            #assert len(words2) == np.sum([len(x) for x in right_words.values() if x != ['']]), [words2, right_words]
-            # assert words2[0] == list(right_words.values())[0][0], [words2[0], list(right_words.values())]
-            # Pair matching attribute
-            """ Too slow
-            unpaired_words = {'left': [], 'right': [],'left_attribute':[],'right_attribute':[]}
-            unpaired_emb = {'left': [], 'right': []}
-            start_l, start_r = 0,0
-            for col in left_words.keys():
-                indexes_l = [words1[start_l:].index(x) for x in left_words[col]]
-                if len(indexes_l)>0:
-                  indexes_l = np.array(indexes_l) + start_l
-                  new_words_l = np.array(words1)[indexes_l]
-                  new_emb_l = emb1[indexes_l]
-                  start_l += len(left_words[col])
-                else:
-                  new_words_l = []
-                  new_emb_l = self.zero_emb
-
-                indexes_r = [words2[start_r:].index(x) for x in right_words[col]]
-                if len(indexes_r)>0:
-                  indexes_r = np.array(indexes_r) + start_r
-                  new_words_r = np.array(words2)[indexes_r]
-                  new_emb_r = emb2[indexes_r]
-                  start_r += len(right_words[col])                
-                else:
-                  new_words_r = []
-                  new_emb_r = self.zero_emb
-
-                emb_pair = []
-                tmp_word, tmp_emb = self.generate_pairs(new_words_l, new_words_r, new_emb_l, new_emb_r)
-                for w_l, w_r, sim, emb in zip(tmp_word['left_word'], tmp_word['right_word'], tmp_word['cos_sim'], tmp_emb):
-                  if w_l == '[UNP]' and w_r != '[UNP]':
-                    unpaired_words['right'].append(w_r)
-                    unpaired_words['right_attribute'].append(col)
-                    unpaired_emb['right'].append(emb[1])
-                  elif w_r == '[UNP]' and w_l != '[UNP]':
-                    unpaired_words['left'].append(w_l)
-                    unpaired_words['left_attribute'].append(col)
-                    unpaired_emb['left'].append(emb[0])
-                  else:
-                    word_pair['left_word'].append(w_l)
-                    word_pair['right_word'].append(w_r)
-                    word_pair['cos_sim'].append(sim)
-                    word_pair['left_attribute'].append(col)
-                    word_pair['right_attribute'].append(col)
-                    emb_pair.append(emb)
-            emb_pair = torch.stack(emb_pair) if len(emb_pair) > 0 else torch.tensor([])
-
-            # Pair remaining words crossing the attribute schema 
-            # First pair unpaired of left with all words of right
-            # Then pair unpaired of right with all words of left
-
-            for all_side, unp_side in zip(['left','right'], ['right','left']):
-              words_map = right_words if all_side == 'right' else left_words
-              pos_to_attr_map = WordPairGenerator.get_attr_map(words_)
-              emb_unp = torch.stack(unpaired_emb[unp_side]) if len(unpaired_words[unp_side])> 0 else self.zero_emb
-              if all_side == 'right':
-                tmp_word, tmp_emb, pairs = self.generate_pairs(unpaired_words[unp_side], words2, emb_unp, emb2, return_pairs=True)
-              elif all_side == 'left':
-                tmp_word, tmp_emb, pairs = self.generate_pairs(words1, unpaired_words[unp_side], emb1, emb_unp, return_pairs=True)
-
-
-              side_mask = np.array(tmp_word[unp_side + '_word']) != '[UNP]'
-              for key in tmp_word.keys():
-                word_pair[key] = np.concatenate([word_pair[key], np.array(tmp_word[key])[side_mask]])
-                #display(word_pair[key], '***',np.concatenate([word_pair[key], np.array(tmp_word[key])[side_mask]]))
-              all_attr = [pos_to_attr_map[pos] for pos in pairs[side_mask][:, 1 if all_side =='right' else 0]]
-              word_pair[all_side+ '_attribute'] = np.concatenate([word_pair[all_side + '_attribute'], all_attr])
-              word_pair[unp_side+ '_attribute'] = np.concatenate([word_pair[unp_side + '_attribute'], unpaired_words[unp_side + '_attribute']])
-              emb_pair = torch.cat([emb_pair.cpu(), tmp_emb[side_mask].cpu()])"""
+            #assert len(words2) == np.sum([len(x) for x in right_words_map.values() if x != ['']]), [words2, right_words_map]
+            # assert words2[0] == list(right_words_map.values())[0][0], [words2[0], list(right_words_map.values())]
 
             word_pair, emb_pair, pairs = self.generate_pairs(words1, words2, emb1, emb2, return_pairs=True)
-            for side, word_dict in zip(['left', 'right'], [left_words, right_words]):
+            for side, word_dict in zip(['left', 'right'], [left_words_map, right_words_map]):
                 pos_to_attr_map = WordPairGenerator.get_attr_map(word_dict)
                 all_attr = [pos_to_attr_map[pos] for pos in pairs[:, 1 if side == 'right' else 0]]
                 word_pair[side + '_attribute'] = np.array(all_attr)
@@ -283,3 +242,17 @@ class WordPairGenerator(EMFeatures):
             word_pair['attribute'] = ['mixed'] * len(word_pair['left_word'])
             return word_pair, emb
 
+
+    @staticmethod
+    def map_word_to_attr(df, cols, prefix=''):
+        tmp_res = []
+        for i in tqdm(range(df.shape[0])):
+            el = df.iloc[[i]]
+            el_words = {}
+            for col in cols:
+                if el[prefix+col].notna().values[0]:
+                    el_words[col] = str(el[prefix+col].values[0]).split()
+                else:
+                    el_words[col] = []
+            tmp_res.append(el_words.copy())
+        return tmp_res
