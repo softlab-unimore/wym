@@ -328,7 +328,14 @@ class Routine():
         print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
+        res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
         display(res_df)
+        best_f1 = res_df[('test', 'f1')].max()
+        best_features = self.features_dict['train'].columns
+        best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
+        for x in models:
+            if x[0] == best_model_name:
+                best_model = x[1]
 
         # Feature selection
         score_df = {'feature': [], 'score': []}
@@ -359,11 +366,36 @@ class Routine():
                 res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
         self.models = models
 
-
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
-        res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
+
+
+        if best_f1 < res_df[('test', 'f1')].max():
+            best_f1 = res_df[('test', 'f1')].max()
+            best_features = selected_features
+            best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
+            for x in models:
+                if x[0] == best_model_name:
+                    best_model = x[1]
+
+            res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
+
+        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label
+        best_model.fit(X_train, y_train)
+        model_data = {'features': best_features,'model': best_model}
+        tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
+        with open(tmp_path, 'wb') as file:
+            pickle.dump(model_data, file)
+
         return res_df
+
+    def get_match_score(self, features_df):
+        tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
+        with open(tmp_path, 'rb') as file:
+            model_data = pickle.load(file)
+        X = features_df[model_data['features']].to_numpy()
+        model = model_data['model']
+        return model.predict_proba(X)[:,1]
 
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
