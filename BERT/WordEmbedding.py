@@ -133,6 +133,7 @@ class WordEmbedding():
     def generate_embedding(self, df, chunk_size=1000):
         emb_list, words_list = [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
+        print('Computing embedding')
         for chunk in tqdm(range(n_chunk)):
             gc.collect()
             torch.cuda.empty_cache()

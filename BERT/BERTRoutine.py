@@ -54,6 +54,7 @@ class Routine():
         self.dataset_name = dataset_name
         self.model_name = model_name
         self.feature_extractor = FeatureExtractor()
+        self.we = WordEmbedding(device=self.device)
         if dataset_path == None:
             self.dataset_path = os.path.join(softlab_path, 'Dataset', 'Entity Matching', dataset_name)
         self.project_path = os.path.join(softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
@@ -107,9 +108,9 @@ class Routine():
                 for char in spec_chars:
                     self.table_A[col] = self.table_A[col].str.replace(' \\' + char + ' ', ' ')
                     self.table_B[col] = self.table_B[col].str.replace(' \\' + char + ' ', ' ')
-
-                self.table_A[col] = self.table_A[col].str.replace('-', ' ')
-                self.table_B[col] = self.table_B[col].str.replace('-', ' ')
+                for char in ['-','/','\\']:
+                    self.table_A[col] = self.table_A[col].str.replace(char, ' ')
+                    self.table_B[col] = self.table_B[col].str.replace(char, ' ')
                 self.table_A[col] = self.table_A[col].str.split().str.join(" ")
                 self.table_B[col] = self.table_B[col].str.split().str.join(" ")
 
@@ -132,13 +133,13 @@ class Routine():
         tmp_cols = ['id', 'left_id', 'right_id','label']
         self.train_merged = pd.merge(
             pd.merge(self.train[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
-            self.table_B.add_prefix('right_'), on='right_id')
+            self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
         self.test_merged = pd.merge(
             pd.merge(self.test[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
-            self.table_B.add_prefix('right_'), on='right_id')
+            self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
         self.valid_merged = pd.merge(
             pd.merge(self.valid[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
-            self.table_B.add_prefix('right_'), on='right_id')
+            self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
 
 
 
@@ -157,7 +158,7 @@ class Routine():
             print('Loaded ')
         except Exception as e:
             print(e)
-            we = WordEmbedding(device=self.device)
+            we = self.we
             for name, df in [('table_A', self.table_A), ('table_B', self.table_B)]:
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -172,9 +173,10 @@ class Routine():
                     pickle.dump(words, file)
 
     def get_processed_data(self, df, chunk_size=1000):
-        we = WordEmbedding(device=self.device)
+        we = self.we
         res = {}
         for side in ['left','right']:
+            print(f'Embedding {side} side')
             prefix = self.lp if side == 'left' else self.rp
             cols =[prefix + col for col in self.cols]
             tmp_df = df.loc[:, cols]
@@ -218,14 +220,16 @@ class Routine():
         return words_pairs_dict, emb_pairs_dict
 
     def get_word_pairs(self, df, data_dict, use_schema=True):
-        wp = WordPairGenerator(use_schema=use_schema)
+        wp = WordPairGenerator(df =df, use_schema=use_schema)
         word_pairs, emb_pairs = wp.get_word_pairs(df,data_dict)
         word_pairs = pd.DataFrame(word_pairs)
         return emb_pairs, word_pairs
 
-    def net_train(self, num_epochs=100, lr=1e-4, batch_size=128):
-        word_pairs = self.words_pairs_dict['train'].copy()
-        emb_pairs = self.emb_pairs_dict['train']
+    def net_train(self, num_epochs=100, lr=1e-4, batch_size=128, word_pairs=None, emb_pairs=None):
+        if word_pairs is None:
+            word_pairs = self.words_pairs_dict['train'].copy()
+        if emb_pairs is None:
+            emb_pairs = self.emb_pairs_dict['train']
         data_loader = DatasetAccoppiate(word_pairs, emb_pairs)
         self.train_data_loader = data_loader
         best_model = NetAccoppiate()
@@ -278,6 +282,12 @@ class Routine():
         self.features_dict, self.word_pair_dict = features_dict, word_pair_dict
         return features_dict, word_pair_dict
 
+    def get_relevance_scores(self, emb_pairs, word_pairs):
+        feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
+            model=self.word_pair_model, train_data_loader=self.train_data_loader)
+
+        return feat, word_pairs
+
     def extract_features(self, model, word_pairs, emb_pairs, train_data_loader):
         model.eval()
         model.to(self.device)
@@ -289,7 +299,7 @@ class Routine():
         return features, word_pair_corrected
 
 
-    def EM_modelling(self, *args):
+    def EM_modelling(self,  *args, quantile_threshold=0.45):
         models = [('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
                   ('LDA', Pipeline([('mm', MinMaxScaler()), ('LDA', LinearDiscriminantAnalysis())])),
                   ('KNN', Pipeline([('mm', MinMaxScaler()), ('KNN', KNeighborsClassifier())])),
@@ -322,6 +332,7 @@ class Routine():
 
         # Feature selection
         score_df = {'feature': [], 'score': []}
+        print('running feature score')
         for feat in tqdm(self.features_dict['train'].columns):
             score_df['feature'].append(feat)
             X_train, y_train = self.features_dict['train'][[feat]].to_numpy(), self.train.label
@@ -334,18 +345,20 @@ class Routine():
         score_df = pd.DataFrame(score_df)
         score_df = score_df.set_index('feature')
         score_df.plot(kind='bar', title='Feature importances');
-        selected_features = score_df[score_df['score'] > score_df['score'].quantile(.1)].index
+        selected_features = score_df[score_df['score'] > score_df['score'].quantile(quantile_threshold)].index
 
         X_train, y_train = self.features_dict['train'][selected_features].to_numpy(), self.train.label
         X_test, y_test = self.features_dict['test'][selected_features].to_numpy(), self.test.label
 
         res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
+        print('Running models')
         for name, model in tqdm(models):
             model.fit(X_train, y_train)
             for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
                 res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
                 res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
         self.models = models
+
 
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
