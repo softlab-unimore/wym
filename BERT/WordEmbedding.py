@@ -127,11 +127,11 @@ class WordEmbedding():
         for i, word_list in enumerate(words):
             last_index = word_list.index('[SEP]')
             words_cutted.append(word_list[:last_index])
-            emb_cutted.append(emb_all[i][:last_index])
+            emb_cutted.append(emb_all[i][:last_index].cpu())
         emb_all = np.array(emb_cutted, dtype=object)
         return emb_all, words_cutted
 
-    def generate_embedding(self, df, chunk_size=1000):
+    def generate_embedding(self, df, chunk_size=500):
         emb_list, words_list = [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
         if self.verbose:
@@ -145,5 +145,6 @@ class WordEmbedding():
             emb, words = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
             emb_list.append(emb)
             words_list += words
-        emb_list = np.concatenate(emb_list)
+        if len(emb_list)> 0:
+            emb_list = np.concatenate(emb_list)
         return emb_list, words_list
