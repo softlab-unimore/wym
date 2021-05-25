@@ -33,6 +33,7 @@ from FeatureExtractor import FeatureExtractor
 from Net import DatasetAccoppiate, NetAccoppiate, train_model
 from WordEmbedding import WordEmbedding
 from WordPairGenerator import WordPairGenerator
+from Evaluation import evaluate_df
 
 
 class Routine():
@@ -400,4 +401,56 @@ class Routine():
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
 
+    def get_predictor(self):
+        self.reset_networks = False
+        self.net_train()
 
+        def predictor(df_to_process, routine):
+            df_to_process = df_to_process.copy().reset_index(drop=True)
+            df_to_process['id'] = df_to_process.index
+            data_dict = routine.get_processed_data(df_to_process, chunk_size=5000)
+            emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
+            features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
+            routine.get_match_score(features)
+            data_dict = routine.get_processed_data(df_to_process, chunk_size=5000)
+            emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
+            features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
+            return routine.get_match_score(features)
+        return partial(predictor,routine=self)
+
+    def evaluation(self, df):
+        predictor = self.get_predictor()
+
+        tmp_df = df[df.label == 1]
+        max_len = min(100, tmp_df.shape[0])
+        df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
+        df_to_process['id'] = df_to_process.index
+        data_dict = self.get_processed_data(df_to_process, chunk_size=5000)
+        emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
+        features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
+        self.df_to_process = df_to_process
+        res_df = evaluate_df(word_relevance, df_to_process, predictor)
+
+        res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
+        match_stat = res_df.groupby('comb_name')[['concorde']].mean()
+        match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match.csv'))
+        display(match_stat)
+        res_df_match = res_df
+
+        tmp_df = df[df.label == 0].sample(min(df[df.label == 0].shape[0], 1500), random_state=0)
+        pred = predictor(tmp_df)
+        tmp_df = tmp_df[ (pred> 0.30)]
+        max_len = min(100, tmp_df.shape[0])
+        df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
+        df_to_process['id'] = df_to_process.index
+        data_dict = self.get_processed_data(df_to_process, chunk_size=5000)
+        emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
+        features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
+        res_df = evaluate_df(word_relevance, df_to_process, predictor)
+        res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
+        no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
+        no_match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match.csv'))
+        display(no_match_stat)
+        res_df_no_match = res_df
+
+        return res_df_match, res_df_no_match
