@@ -1,3 +1,4 @@
+from functools import partial
 import copy
 import gc
 import os
@@ -40,7 +41,7 @@ class Routine():
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
                  col_to_drop=['left_price', 'right_price'],
-                 softlab_path='/content/drive/Shareddrives/SoftLab/'):
+                 softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -55,7 +56,8 @@ class Routine():
         self.dataset_name = dataset_name
         self.model_name = model_name
         self.feature_extractor = FeatureExtractor()
-        self.we = WordEmbedding(device=self.device)
+        self.verbose = verbose
+        self.we = WordEmbedding(device=self.device, verbose=verbose)
         if dataset_path == None:
             self.dataset_path = os.path.join(softlab_path, 'Dataset', 'Entity Matching', dataset_name)
         self.project_path = os.path.join(softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
@@ -112,8 +114,8 @@ class Routine():
                 for char in ['-','/','\\']:
                     self.table_A[col] = self.table_A[col].str.replace(char, ' ')
                     self.table_B[col] = self.table_B[col].str.replace(char, ' ')
-                self.table_A[col] = self.table_A[col].str.split().str.join(" ")
-                self.table_B[col] = self.table_B[col].str.split().str.join(" ")
+                self.table_A[col] = self.table_A[col].str.split().str.join(" ").str.lower()
+                self.table_B[col] = self.table_B[col].str.split().str.join(" ").str.lower()
 
         self.table_A = self.table_A.replace('None', np.nan).replace('nan', np.nan)
         self.table_B = self.table_B.replace('None', np.nan).replace('nan', np.nan)
@@ -144,7 +146,7 @@ class Routine():
 
 
 
-    def generate_df_embedding(self, chunk_size=1000):
+    def generate_df_embedding(self, chunk_size=500):
         self.embeddings = {}
         self.words = {}
         try:
@@ -152,13 +154,14 @@ class Routine():
             for df_name in ['table_A', 'table_B']:
                 tmp_path = os.path.join(self.model_files_path, 'emb_' + df_name + '.csv')
                 with open(tmp_path, 'rb') as file:
-                    self.embeddings[df_name] = torch.load(file)
+                    self.embeddings[df_name] = torch.load(file,map_location=torch.device(self.device) )
                 tmp_path = os.path.join(self.model_files_path, 'words_list_' + df_name + '.csv')
                 with open(tmp_path, 'rb') as file:
                     self.words[df_name] = pickle.load(file)
             print('Loaded ')
         except Exception as e:
             print(e)
+            self.we.verbose = self.verbose
             we = self.we
             for name, df in [('table_A', self.table_A), ('table_B', self.table_B)]:
                 gc.collect()
@@ -173,11 +176,12 @@ class Routine():
                 with open(tmp_path, 'wb') as file:
                     pickle.dump(words, file)
 
-    def get_processed_data(self, df, chunk_size=1000):
+    def get_processed_data(self, df, chunk_size=500, verbose=False):
         we = self.we
         res = {}
         for side in ['left','right']:
-            print(f'Embedding {side} side')
+            if verbose:
+                print(f'Embedding {side} side')
             prefix = self.lp if side == 'left' else self.rp
             cols =[prefix + col for col in self.cols]
             tmp_df = df.loc[:, cols]
@@ -204,7 +208,7 @@ class Routine():
             print(e)
 
             word_pair_generator = WordPairGenerator(self.words, self.embeddings, self.words_divided, df=self.test,
-                                                    use_schema=use_schema)
+                                                    use_schema=use_schema, device=self.device, verbose=self.verbose)
             for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
                 word_pairs, emb_pairs = word_pair_generator.process_df(df)
                 tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
@@ -221,12 +225,12 @@ class Routine():
         return words_pairs_dict, emb_pairs_dict
 
     def get_word_pairs(self, df, data_dict, use_schema=True):
-        wp = WordPairGenerator(df =df, use_schema=use_schema)
+        wp = WordPairGenerator(df =df, use_schema=use_schema, device=self.device, verbose=self.verbose)
         word_pairs, emb_pairs = wp.get_word_pairs(df,data_dict)
         word_pairs = pd.DataFrame(word_pairs)
         return emb_pairs, word_pairs
 
-    def net_train(self, num_epochs=100, lr=1e-4, batch_size=128, word_pairs=None, emb_pairs=None):
+    def net_train(self, num_epochs=50, lr=1e-4, batch_size=128, word_pairs=None, emb_pairs=None):
         if word_pairs is None:
             word_pairs = self.words_pairs_dict['train'].copy()
         if emb_pairs is None:
@@ -238,8 +242,7 @@ class Routine():
         tmp_path = os.path.join(self.model_files_path, 'net0.pickle')
         try:
             assert self.reset_networks == False, 'resetting networks'
-            best_model.load_state_dict(torch.load(tmp_path,
-                                                  map_location=torch.device(device)))
+            best_model.load_state_dict(torch.load(tmp_path,map_location=torch.device(device)))
         except Exception as e:
             print(e)
             net = NetAccoppiate()
@@ -313,7 +316,7 @@ class Routine():
                   ('ET', ExtraTreesClassifier(random_state=0)),
                   ('dummy', DummyClassifier(strategy='stratified', random_state=0)),
                   ]
-        models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
+        #models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
         model_names = [x[0] for x in models]
 
         X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label
@@ -344,12 +347,12 @@ class Routine():
         for feat in tqdm(self.features_dict['train'].columns):
             score_df['feature'].append(feat)
             X_train, y_train = self.features_dict['train'][[feat]].to_numpy(), self.train.label
-            X_test, y_test = self.features_dict['valid'][[feat]].to_numpy(), self.test.label #
+            X_test, y_test = self.features_dict['valid'][[feat]].to_numpy(), self.valid.label #
 
             model = LogisticRegression(random_state=0)
             model.fit(X_train, y_train)
             pred = model.predict(X_test)
-            score_df['score'].append(f1_score(self.test.label, pred))
+            score_df['score'].append(f1_score(y_test, pred))
         score_df = pd.DataFrame(score_df)
         score_df = score_df.set_index('feature')
         score_df.plot(kind='bar', title='Feature importances');
@@ -366,7 +369,7 @@ class Routine():
                 res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
                 res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
         self.models = models
-
+        display(res_df)
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
 
@@ -388,6 +391,7 @@ class Routine():
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
 
+        self.evaluation(self.valid_merged)
         return res_df
 
     def get_match_score(self, features_df):

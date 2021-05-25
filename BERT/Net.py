@@ -1,3 +1,4 @@
+import gc
 import os
 import copy
 import torch
@@ -134,6 +135,9 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
 
     for epoch in range(num_epochs):
         out = f'Epoch {epoch+1:3d}/{num_epochs}: '
+        if epoch %5 == 0:
+            gc.collect()
+            torch.cuda.empty_cache()
         # Each epoch has a training and validation phase
         for phase in ['train', 'valid']:
             if phase == 'train':

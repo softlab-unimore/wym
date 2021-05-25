@@ -22,8 +22,8 @@ class WordPairGenerator(EMFeatures):
     word_pair_empty = {'left_word': [], 'right_word': [], 'cos_sim': [], 'left_attribute': [],
                        'right_attribute': []}
 
-    def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=0.55,
-                 duplicate_threshold=.75, **kwargs):
+    def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=None,
+                 duplicate_threshold=.75, verbose=False, **kwargs):
         super().__init__(**kwargs)
         self.words = words
         self.embeddings = embeddings
@@ -31,11 +31,20 @@ class WordPairGenerator(EMFeatures):
         self.unpair_threshold = unpair_threshold
         self.duplicate_threshold = duplicate_threshold
         self.words_divided = words_divided
+        self.verbose = verbose
+
+
 
     def get_word_pairs(self, df, data_dict):
         word_dict_list = []
         embedding_list = []
-
+        if 'id' not in df.columns:
+            df['id'] = df.index
+        if self.verbose:
+            print('generating word_pairs')
+            to_cycle = tqdm(range(df.shape[0]))
+        else:
+            to_cycle = range(df.shape[0])
         for i, words1, emb1, left_words_map, words2, emb2, right_words_map in zip(
                 tqdm(range(df.shape[0])),
                 data_dict['left_words'], data_dict['left_emb'], data_dict['left_word_map'],
@@ -80,7 +89,8 @@ class WordPairGenerator(EMFeatures):
     def process_df(self, df):
         word_dict_list = []
         embedding_list = []
-        for i in tqdm(range(df.shape[0])):
+        to_cycle = tqdm(range(df.shape[0])) if self.verbose == True else range(df.shape[0])
+        for i in to_cycle:
             if i % 2000 == 0:
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -336,10 +346,13 @@ class WordPairGenerator(EMFeatures):
             return word_pair, emb_pair
 
     @staticmethod
-    def map_word_to_attr(df, cols, prefix=''):
+    def map_word_to_attr(df, cols, prefix='', verbose=False):
         tmp_res = []
-        print('Mapping word to attr')
-        for i in tqdm(range(df.shape[0])):
+
+        if verbose:
+            print('Mapping word to attr')
+        to_cycle = tqdm(range(df.shape[0])) if verbose else range(df.shape[0])
+        for i in to_cycle:
             el = df.iloc[[i]]
             el_words = {}
             for col in cols:

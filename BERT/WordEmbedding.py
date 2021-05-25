@@ -7,7 +7,7 @@ from transformers import BertModel, BertTokenizer
 
 
 class WordEmbedding():
-    def __init__(self, device='auto'):
+    def __init__(self, device='auto', verbose=False):
         self.model = BertModel.from_pretrained('bert-base-uncased', output_hidden_states=True)
         # Set the device to GPU (cuda) if available, otherwise stick with CPU
         if device == 'auto':
@@ -17,6 +17,7 @@ class WordEmbedding():
         self.model = self.model.to(self.device)
         self.model = self.model.eval()
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.verbose = verbose
 
     def get_word_embeddings(self, sentences):
         tokens = self.tokenizer(sentences, padding=True, return_tensors='pt')
@@ -133,8 +134,12 @@ class WordEmbedding():
     def generate_embedding(self, df, chunk_size=1000):
         emb_list, words_list = [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
-        print('Computing embedding')
-        for chunk in tqdm(range(n_chunk)):
+        if self.verbose:
+            print('Computing embedding')
+            to_cycle = tqdm(range(n_chunk))
+        else:
+            to_cycle = range(n_chunk)
+        for chunk in to_cycle:
             gc.collect()
             torch.cuda.empty_cache()
             emb, words = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
