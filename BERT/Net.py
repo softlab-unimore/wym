@@ -24,9 +24,9 @@ class TanhScaler(StandardScaler):
 
 class DatasetAccoppiate(Dataset):
     def __init__(self, word_pairs, embedding_pairs):
-        X = self.preprocess(embedding_pairs.cpu())
+        X = self.preprocess(embedding_pairs)
         self.X = X
-        self.y = self.preprocess_label(word_pairs, embedding_pairs.cpu())
+        self.y = self.preprocess_label(word_pairs, embedding_pairs)
 
     def preprocess(self, embedding_pairs):
         mean_vec = embedding_pairs.mean(1)
@@ -44,7 +44,7 @@ class DatasetAccoppiate(Dataset):
     def preprocess_label(self, word_pairs, embedding_pairs):
         tmp_word_pairs = word_pairs.copy()
         tmp_word_pairs['cos_sim'] = torch.cosine_similarity(embedding_pairs[:, 0, :], embedding_pairs[:, 1, :])
-        tmp_word_pairs['label_corrected'] = word_pairs['label']
+        tmp_word_pairs['label_corrected'] = tmp_word_pairs['label']
         tmp_word_pairs.loc[(tmp_word_pairs.cos_sim >= .7) & (tmp_word_pairs.label == 0), 'label_corrected'] = .5
         tmp_word_pairs.loc[(tmp_word_pairs.cos_sim < .5) & (tmp_word_pairs.label == 1), 'label_corrected'] = .5
         df = tmp_word_pairs

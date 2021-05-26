@@ -129,7 +129,7 @@ class Routine():
         except Exception as e:
             print(e)
             for name, df in zip(['table_A', 'table_B'], [self.table_A, self.table_B]):
-                self.words_divided[name] = WordPairGenerator.map_word_to_attr(df, self.cols)
+                self.words_divided[name] = WordPairGenerator.map_word_to_attr(df, self.cols, verbose=self.verbose)
             with open(tmp_path, 'wb') as file:
                 pickle.dump(self.words_divided, file)
 
@@ -143,6 +143,9 @@ class Routine():
         self.valid_merged = pd.merge(
             pd.merge(self.valid[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
+        for col, type in zip(['id','label'],['UInt32','UInt8']):
+            self.train_merged[col] = self.train_merged[col].astype(type)
+
 
 
 
@@ -185,7 +188,7 @@ class Routine():
             prefix = self.lp if side == 'left' else self.rp
             cols =[prefix + col for col in self.cols]
             tmp_df = df.loc[:, cols]
-            res[side+'_word_map'] = WordPairGenerator.map_word_to_attr(tmp_df, self.cols, prefix=prefix)
+            res[side+'_word_map'] = WordPairGenerator.map_word_to_attr(tmp_df, self.cols, prefix=prefix, verbose=self.verbose)
             emb, words = we.generate_embedding(tmp_df, chunk_size=chunk_size)
             res[side + '_emb'] = emb
             res[side + '_words'] = words
@@ -230,11 +233,13 @@ class Routine():
         word_pairs = pd.DataFrame(word_pairs)
         return emb_pairs, word_pairs
 
-    def net_train(self, num_epochs=50, lr=1e-4, batch_size=128, word_pairs=None, emb_pairs=None):
-        if word_pairs is None:
-            word_pairs = self.words_pairs_dict['train'].copy()
-        if emb_pairs is None:
+    def net_train(self, num_epochs=50, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None, valid_pairs=None, valid_emb=None):
+        if word_pairs is None or emb_pairs is None:
+            word_pairs = self.words_pairs_dict['train']
             emb_pairs = self.emb_pairs_dict['train']
+        if valid_pairs is None or valid_emb is None:
+            valid_pairs = self.words_pairs_dict['valid']
+            valid_emb = self.emb_pairs_dict['valid']
         data_loader = DatasetAccoppiate(word_pairs, emb_pairs)
         self.train_data_loader = data_loader
         best_model = NetAccoppiate()
@@ -253,7 +258,7 @@ class Routine():
 
             train_dataset = data_loader
             valid_dataset = copy.deepcopy(train_dataset)
-            valid_dataset.__init__(self.words_pairs_dict['valid'], self.emb_pairs_dict['valid'])
+            valid_dataset.__init__(valid_pairs, valid_emb)
 
             dataloaders_dict = {'train': DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4),
                                 'valid': DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4)}
@@ -369,9 +374,9 @@ class Routine():
                 res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
                 res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
         self.models = models
-        display(res_df)
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
+        display(res_df)
 
 
         if best_f1 < res_df[('test', 'f1')].max():
@@ -412,11 +417,7 @@ class Routine():
         def predictor(df_to_process, routine):
             df_to_process = df_to_process.copy().reset_index(drop=True)
             df_to_process['id'] = df_to_process.index
-            data_dict = routine.get_processed_data(df_to_process, chunk_size=5000)
-            emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
-            features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
-            routine.get_match_score(features)
-            data_dict = routine.get_processed_data(df_to_process, chunk_size=5000)
+            data_dict = routine.get_processed_data(df_to_process, chunk_size=500)
             emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
             features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
             return routine.get_match_score(features)
@@ -424,12 +425,14 @@ class Routine():
 
     def evaluation(self, df):
         predictor = self.get_predictor()
+        self.verbose = False
+        self.we.verbose = False
 
         tmp_df = df[df.label == 1]
         max_len = min(100, tmp_df.shape[0])
         df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
         df_to_process['id'] = df_to_process.index
-        data_dict = self.get_processed_data(df_to_process, chunk_size=5000)
+        data_dict = self.get_processed_data(df_to_process, chunk_size=500)
         emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
         features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
         self.df_to_process = df_to_process
@@ -441,13 +444,13 @@ class Routine():
         display(match_stat)
         res_df_match = res_df
 
-        tmp_df = df[df.label == 0].sample(min(df[df.label == 0].shape[0], 1500), random_state=0)
+        tmp_df = df[df.label == 0].sample(min(df[df.label == 0].shape[0], 2500), random_state=0)
         pred = predictor(tmp_df)
-        tmp_df = tmp_df[ (pred> 0.30)]
+        tmp_df = tmp_df[ (pred> 0.15)]
         max_len = min(100, tmp_df.shape[0])
         df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
         df_to_process['id'] = df_to_process.index
-        data_dict = self.get_processed_data(df_to_process, chunk_size=5000)
+        data_dict = self.get_processed_data(df_to_process, chunk_size=500)
         emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
         features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
         res_df = evaluate_df(word_relevance, df_to_process, predictor)
