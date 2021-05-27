@@ -47,7 +47,7 @@ class FeatureExtractorGeneral:
 class FeatureExtractor(FeatureExtractorGeneral):
 
     @staticmethod
-    def extract_features(word_pairs_df:pd.DataFrame, complementary=True, pos_threshold=.40, null_value=0.5):
+    def extract_features(word_pairs_df:pd.DataFrame, complementary=True, pos_threshold=.45, null_value=0.5):
         functions = ['mean', 'sum', 'count', 'min', 'max', ('M-m', lambda x : x.max() - x.min()), 'median']
         function_names = ['mean', 'sum', 'count', 'min', 'max', 'M-m', 'median']
         all_stat = word_pairs_df.groupby(['id'])['pred'].agg(functions)
@@ -88,7 +88,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
         side_stat = stat.unstack(1)
         side_stat.columns = ['_'.join(col) for col in side_stat.columns]
         side_stat = side_stat.fillna(null_value)
-        side_stat = FeatureExtractorGeneral.compute_min_max_features(side_stat, function_names)
+        side_stat = FeatureExtractorGeneral.compute_min_max_features(side_stat, function_names, null_value=null_value)
 
         #try:
         stat = paired_stat.join(unpaired_stat_full, on='id', how='outer').merge(
