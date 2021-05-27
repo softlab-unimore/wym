@@ -26,15 +26,18 @@ class WordPairGenerator(EMFeatures):
     zero_emb = torch.zeros(1, 768)
 
     def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=None,
-                 duplicate_threshold=.75, verbose=False, **kwargs):
+                     cross_attr_threshold=None,
+                     duplicate_threshold=.75, verbose=False, **kwargs):
         super().__init__(**kwargs)
         self.words = words
         self.embeddings = embeddings
         self.use_schema = use_schema
         self.unpair_threshold = unpair_threshold if unpair_threshold is not None else WordPairGenerator.unpair_threshold
+        self.cross_attr_threshold = cross_attr_threshold if cross_attr_threshold is not None else WordPairGenerator.cross_attr_threshold
         self.duplicate_threshold = duplicate_threshold
         self.words_divided = words_divided
         self.verbose = verbose
+        self.unpair_threshold
 
 
 
