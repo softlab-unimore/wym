@@ -40,7 +40,7 @@ from Evaluation import evaluate_df
 class Routine():
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
-                 col_to_drop=['left_price', 'right_price'],
+                 col_to_drop=[],
                  softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -74,13 +74,12 @@ class Routine():
         sys.path.append(os.path.join(project_path, 'common_functions'))
         sys.path.append(os.path.join(project_path, 'src'))
         pd.options.display.max_colwidth = 130
-        self.col_to_drop = col_to_drop
-        self.train = pd.read_csv(os.path.join(dataset_path, 'train_merged.csv')).drop(self.col_to_drop, 1)
-        self.test = pd.read_csv(os.path.join(dataset_path, 'test_merged.csv')).drop(self.col_to_drop, 1)
-        self.valid = pd.read_csv(os.path.join(dataset_path, 'valid_merged.csv')).drop(self.col_to_drop, 1)
-        self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv'))
-        self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv'))
-        self.table_A_orig = self.table_A.copy()
+        self.train = pd.read_csv(os.path.join(dataset_path, 'train_merged.csv'))
+        self.test = pd.read_csv(os.path.join(dataset_path, 'test_merged.csv'))
+        self.valid = pd.read_csv(os.path.join(dataset_path, 'valid_merged.csv'))
+        self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv')).drop(col_to_drop, 1)
+        self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv')).drop(col_to_drop, 1)
+
 
         left_ids = []
         right_ids = []
@@ -145,6 +144,8 @@ class Routine():
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
         for col, type in zip(['id','label'],['UInt32','UInt8']):
             self.train_merged[col] = self.train_merged[col].astype(type)
+            self.valid_merged[col] = self.valid_merged[col].astype(type)
+            self.test_merged[col] = self.test_merged[col].astype(type)
 
 
 
@@ -280,36 +281,31 @@ class Routine():
         self.word_pair_model = best_model
         return best_model
 
-    def preprocess_word_pairs(self):
+    def preprocess_word_pairs(self, **kwargs):
         features_dict = {}
         word_pair_dict = {}
         for name in ['train', 'valid', 'test']:
             feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
-                                                          self.emb_pairs_dict[name], self.train_data_loader)
+                                                          self.emb_pairs_dict[name], self.train_data_loader, **kwargs)
             features_dict[name] = feat
             word_pair_dict[name] = word_pairs
         self.features_dict, self.word_pair_dict = features_dict, word_pair_dict
         return features_dict, word_pair_dict
 
-    def get_relevance_scores(self, emb_pairs, word_pairs):
-        feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
-            model=self.word_pair_model, train_data_loader=self.train_data_loader)
-
-        return feat, word_pairs
-
-    def extract_features(self, model, word_pairs, emb_pairs, train_data_loader):
+    def extract_features(self, model, word_pairs, emb_pairs, train_data_loader, **kwargs):
         model.eval()
         model.to(self.device)
         data_loader = train_data_loader
         data_loader.__init__(word_pairs, emb_pairs)
         word_pair_corrected = data_loader.word_pairs_corrected
         word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
-        features = self.feature_extractor.extract_features(word_pair_corrected)
+        features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
         return features, word_pair_corrected
 
-
     def EM_modelling(self,  *args, quantile_threshold=0.45):
-        models = [('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
+
+        if hasattr(self, 'models') == False:
+            self.models = [('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
                   ('LDA', Pipeline([('mm', MinMaxScaler()), ('LDA', LinearDiscriminantAnalysis())])),
                   ('KNN', Pipeline([('mm', MinMaxScaler()), ('KNN', KNeighborsClassifier())])),
                   ('CART', DecisionTreeClassifier(random_state=0)),
@@ -322,18 +318,17 @@ class Routine():
                   ('dummy', DummyClassifier(strategy='stratified', random_state=0)),
                   ]
         #models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
-        model_names = [x[0] for x in models]
+        model_names = [x[0] for x in self.models]
 
         X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label
         X_test, y_test = self.features_dict['test'].to_numpy(), self.test.label
 
         res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
-        for name, model in tqdm(models):
+        for name, model in tqdm(self.models):
             model.fit(X_train, y_train)
             for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
                 res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
                 res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
-        self.models = models
         print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
@@ -342,7 +337,7 @@ class Routine():
         best_f1 = res_df[('test', 'f1')].max()
         best_features = self.features_dict['train'].columns
         best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
-        for x in models:
+        for x in self.models:
             if x[0] == best_model_name:
                 best_model = x[1]
 
@@ -368,12 +363,12 @@ class Routine():
 
         res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
         print('Running models')
-        for name, model in tqdm(models):
+        for name, model in tqdm(self.models):
             model.fit(X_train, y_train)
             for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
                 res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
                 res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
-        self.models = models
+        self.models = self.models
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
         display(res_df)
@@ -383,7 +378,7 @@ class Routine():
             best_f1 = res_df[('test', 'f1')].max()
             best_features = selected_features
             best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
-            for x in models:
+            for x in self.models:
                 if x[0] == best_model_name:
                     best_model = x[1]
 
@@ -399,6 +394,7 @@ class Routine():
         self.evaluation(self.valid_merged)
         return res_df
 
+
     def get_match_score(self, features_df):
         tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
         with open(tmp_path, 'rb') as file:
@@ -409,6 +405,12 @@ class Routine():
 
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
+
+    def get_relevance_scores(self, emb_pairs, word_pairs, **kwargs):
+        feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
+            model=self.word_pair_model, train_data_loader=self.train_data_loader, **kwargs)
+
+        return feat, word_pairs
 
     def get_predictor(self):
         self.reset_networks = False

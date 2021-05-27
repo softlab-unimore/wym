@@ -72,7 +72,7 @@ def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', '
         fixed_side = 'right' if side == 'left' else 'left'
         res_df = ev.evaluate_set(range(df_to_process.shape[0]), 'bert', variable_side=side, fixed_side=fixed_side,
                                  utility=True)
-        res_list.append(res_df)
+        res_list.append(res_df.copy())
 
     return pd.concat(res_list)
 
