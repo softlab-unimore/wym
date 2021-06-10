@@ -91,17 +91,21 @@ class FeatureExtractor(FeatureExtractorGeneral):
         side_stat = FeatureExtractorGeneral.compute_min_max_features(side_stat, function_names, null_value=null_value)
 
         #try:
-        stat = paired_stat.join(unpaired_stat_full, on='id', how='outer').merge(
-                unpaired_stat, on='id', how='outer').merge(
-                all_stat, on='id', how='outer').merge(
-                side_stat, on='id', how='outer').fillna(null_value).sort_index()
+        stat = paired_stat
+        for df in [unpaired_stat_full, unpaired_stat, all_stat, side_stat]:
+            stat = stat.join(df, on='id', how='outer').sort_index()
+            if 'id' in stat.columns:
+                stat = stat.set_index('id')
         # except Exception as e:
         #     print(e)
         #     for i, df in enumerate([paired_stat, unpaired_stat, unpaired_stat_full, all_stat, side_stat]):
         #         print(i)
         #         display(df)
         # .merge(unpaired_stat, on='id', how='outer')
-        stat = FeatureExtractor().compute_derived_features(stat, function_names, possible_unpaired=['_exclusive', '', '_both', '_min','_max'])
+        stat = FeatureExtractor().compute_derived_features(stat,
+                                                           function_names,
+                                                           possible_unpaired=['_exclusive', '', '_both', '_min', '_max'])
         if 'id' in stat.columns:
             stat = stat.set_index('id')
+        stat = stat.sort_index()
         return stat

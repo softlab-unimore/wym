@@ -32,8 +32,8 @@ class DatasetAccoppiate(Dataset):
         mean_vec = embedding_pairs.mean(1)
         abs_diff_vec = torch.abs(embedding_pairs[:, 0, :] - embedding_pairs[:, 1, :])
         if hasattr(self, 'tanh_scaler_mean') == False:
-            self.tanh_scaler_mean = TanhScaler().fit(mean_vec)
-            self.tanh_scaler_diff = TanhScaler().fit(abs_diff_vec)
+            self.tanh_scaler_mean = TanhScaler().fit(mean_vec.cpu())
+            self.tanh_scaler_diff = TanhScaler().fit(abs_diff_vec.cpu())
 
         # mean_vec_new, abs_diff_vec_new = self.tanh_scaler_mean.transform(mean_vectors), self.tanh_scaler_diff.transform(abs_diff)
         mean_vec_new, abs_diff_vec_new = mean_vec, abs_diff_vec
@@ -43,7 +43,7 @@ class DatasetAccoppiate(Dataset):
 
     def preprocess_label(self, word_pairs, embedding_pairs):
         tmp_word_pairs = word_pairs.copy()
-        tmp_word_pairs['cos_sim'] = torch.cosine_similarity(embedding_pairs[:, 0, :], embedding_pairs[:, 1, :])
+        tmp_word_pairs['cos_sim'] = torch.cosine_similarity(embedding_pairs[:, 0, :].cpu(), embedding_pairs[:, 1, :].cpu())
         tmp_word_pairs['label_corrected'] = tmp_word_pairs['label']
         tmp_word_pairs.loc[(tmp_word_pairs.cos_sim >= .7) & (tmp_word_pairs.label == 0), 'label_corrected'] = .5
         tmp_word_pairs.loc[(tmp_word_pairs.cos_sim < .5) & (tmp_word_pairs.label == 1), 'label_corrected'] = .5
@@ -55,7 +55,7 @@ class DatasetAccoppiate(Dataset):
                                                     on=['left_word', 'right_word'], suffixes=('', '_mean'), how='left')
         self.word_pairs_corrected = word_pairs_corrected
         self.aggregated = grouped
-        return torch.tensor(word_pairs_corrected['label_corrected_mean'].values, dtype=torch.float).view([-1, 1])
+        return torch.tensor(word_pairs_corrected['label_corrected_mean'].values, dtype=torch.float).reshape([-1, 1])
 
     def __len__(self):
         return len(self.X)
@@ -132,12 +132,10 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 1
     overfitting_counter = 0
+    best_epoch = 0
 
     for epoch in range(num_epochs):
         out = f'Epoch {epoch+1:3d}/{num_epochs}: '
-        if epoch %5 == 0:
-            gc.collect()
-            torch.cuda.empty_cache()
         # Each epoch has a training and validation phase
         for phase in ['train', 'valid']:
             if phase == 'train':
@@ -183,11 +181,12 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
             # deep copy the model
             if phase == 'valid' and (epoch_acc > best_acc if high_is_better else epoch_acc < best_acc):
                 best_acc = epoch_acc
+                best_epoch = epoch
                 best_model_wts = copy.deepcopy(model.state_dict())
             if epoch > 1:
                 if phase == 'valid':
                     if ( best_acc > epoch_acc ) == high_is_better:
-                        if overfitting_counter == 50:
+                        if overfitting_counter == 10:
                             break
                         overfitting_counter += 1
                     else:

@@ -148,6 +148,9 @@ class Routine():
             self.test_merged[col] = self.test_merged[col].astype(type)
 
 
+        self.train = self.train_merged
+        self.valid = self.valid_merged
+        self.test = self.test_merged
 
 
     def generate_df_embedding(self, chunk_size=500):
@@ -196,7 +199,7 @@ class Routine():
         return res
 
 
-    def compute_word_pair(self, use_schema=True):
+    def compute_word_pair(self, use_schema=True, **kwargs):
         words_pairs_dict, emb_pairs_dict = {}, {}
         try:
             assert self.reset_files == False, 'Reset_files'
@@ -212,7 +215,7 @@ class Routine():
             print(e)
 
             word_pair_generator = WordPairGenerator(self.words, self.embeddings, self.words_divided, df=self.test,
-                                                    use_schema=use_schema, device=self.device, verbose=self.verbose)
+                                                    use_schema=use_schema, device=self.device, verbose=self.verbose, **kwargs)
             for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
                 word_pairs, emb_pairs = word_pair_generator.process_df(df)
                 tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
@@ -228,8 +231,8 @@ class Routine():
         self.emb_pairs_dict = emb_pairs_dict
         return words_pairs_dict, emb_pairs_dict
 
-    def get_word_pairs(self, df, data_dict, use_schema=True):
-        wp = WordPairGenerator(df =df, use_schema=use_schema, device=self.device, verbose=self.verbose)
+    def get_word_pairs(self, df, data_dict, use_schema=True, **kwargs):
+        wp = WordPairGenerator(df =df, use_schema=use_schema, device=self.device, verbose=self.verbose, **kwargs)
         word_pairs, emb_pairs = wp.get_word_pairs(df,data_dict)
         word_pairs = pd.DataFrame(word_pairs)
         return emb_pairs, word_pairs
@@ -283,14 +286,14 @@ class Routine():
 
     def preprocess_word_pairs(self, **kwargs):
         features_dict = {}
-        word_pair_dict = {}
+        words_pairs_dict = {}
         for name in ['train', 'valid', 'test']:
             feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
                                                           self.emb_pairs_dict[name], self.train_data_loader, **kwargs)
             features_dict[name] = feat
-            word_pair_dict[name] = word_pairs
-        self.features_dict, self.word_pair_dict = features_dict, word_pair_dict
-        return features_dict, word_pair_dict
+            words_pairs_dict[name] = word_pairs
+        self.features_dict, self.words_pairs_dict = features_dict, words_pairs_dict
+        return features_dict, words_pairs_dict
 
     def extract_features(self, model, word_pairs, emb_pairs, train_data_loader, **kwargs):
         model.eval()
@@ -305,7 +308,8 @@ class Routine():
     def EM_modelling(self,  *args, quantile_threshold=0.45):
 
         if hasattr(self, 'models') == False:
-            self.models = [('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
+            self.models = [
+                  ('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
                   ('LDA', Pipeline([('mm', MinMaxScaler()), ('LDA', LinearDiscriminantAnalysis())])),
                   ('KNN', Pipeline([('mm', MinMaxScaler()), ('KNN', KNeighborsClassifier())])),
                   ('CART', DecisionTreeClassifier(random_state=0)),
@@ -320,8 +324,8 @@ class Routine():
         #models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
         model_names = [x[0] for x in self.models]
 
-        X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label
-        X_test, y_test = self.features_dict['test'].to_numpy(), self.test.label
+        X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label.astype(int)
+        X_test, y_test = self.features_dict['test'].to_numpy(), self.test.label.astype(int)
 
         res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
         for name, model in tqdm(self.models):
@@ -346,20 +350,20 @@ class Routine():
         print('running feature score')
         for feat in tqdm(self.features_dict['train'].columns):
             score_df['feature'].append(feat)
-            X_train, y_train = self.features_dict['train'][[feat]].to_numpy(), self.train.label
-            X_test, y_test = self.features_dict['valid'][[feat]].to_numpy(), self.valid.label #
+            X_train, y_train = self.features_dict['train'][[feat]].to_numpy(), self.train.label.astype(int)
+            X_valid, y_valid = self.features_dict['valid'][[feat]].to_numpy(), self.valid.label.astype(int) #
 
             model = LogisticRegression(random_state=0)
             model.fit(X_train, y_train)
-            pred = model.predict(X_test)
-            score_df['score'].append(f1_score(y_test, pred))
+            pred = model.predict(X_valid)
+            score_df['score'].append(f1_score(y_valid, pred))
         score_df = pd.DataFrame(score_df)
         score_df = score_df.set_index('feature')
         score_df.plot(kind='bar', title='Feature importances');
         selected_features = score_df[score_df['score'] > score_df['score'].quantile(quantile_threshold)].index
 
-        X_train, y_train = self.features_dict['train'][selected_features].to_numpy(), self.train.label
-        X_test, y_test = self.features_dict['test'][selected_features].to_numpy(), self.test.label
+        X_train, y_train = self.features_dict['train'][selected_features].to_numpy(), self.train.label.astype(int)
+        X_test, y_test = self.features_dict['test'][selected_features].to_numpy(), self.test.label.astype(int)
 
         res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
         print('Running models')
@@ -384,12 +388,19 @@ class Routine():
 
             res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
 
-        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label
+        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
         best_model.fit(X_train, y_train)
         model_data = {'features': best_features,'model': best_model}
         tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
+
+        linear_model = LogisticRegression(random_state=0)
+        X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label.astype(int)
+        linear_model.fit(X_train, y_train)
+        tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
+        with open(tmp_path, 'wb') as file:
+            pickle.dump(linear_model, file)
 
         self.evaluation(self.valid_merged)
         return res_df
@@ -425,15 +436,34 @@ class Routine():
             return routine.get_match_score(features)
         return partial(predictor,routine=self)
 
-    def evaluation(self, df):
-        predictor = self.get_predictor()
+    def evaluation(self, df, pred_threshold=0.05):
+        self.reset_networks = False
+        self.net_train()
+        tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
+        with open(tmp_path, 'rb') as file:
+            model = pickle.load(file)
+
+        def predictor(df_to_process, routine, model):
+            df_to_process = df_to_process.copy().reset_index(drop=True)
+            df_to_process['id'] = df_to_process.index
+            data_dict = routine.get_processed_data(df_to_process, chunk_size=500)
+            emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
+            features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
+            X = features.to_numpy()
+            return model.predict_proba(X)[:, 1]
+
+        predictor = partial(predictor, routine=self, model=model)
+
         self.verbose = False
         self.we.verbose = False
+        self.ev_df = {}
 
-        tmp_df = df[df.label == 1]
+        pred = predictor(df)
+        tmp_df = df[(pred > 0.5)]
         max_len = min(100, tmp_df.shape[0])
         df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
         df_to_process['id'] = df_to_process.index
+        self.ev_df['match'] = df_to_process
         data_dict = self.get_processed_data(df_to_process, chunk_size=500)
         emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
         features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
@@ -445,13 +475,14 @@ class Routine():
         match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match.csv'))
         display(match_stat)
         res_df_match = res_df
+        match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(['size', 'mean','median','min','max'])
+        match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match_mean_delta.csv'))
 
-        tmp_df = df[df.label == 0].sample(min(df[df.label == 0].shape[0], 2500), random_state=0)
-        pred = predictor(tmp_df)
-        tmp_df = tmp_df[ (pred> 0.15)]
+        tmp_df = df[(pred> pred_threshold) & (pred < 0.5)]
         max_len = min(100, tmp_df.shape[0])
         df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
         df_to_process['id'] = df_to_process.index
+        self.ev_df['nomatch'] = df_to_process
         data_dict = self.get_processed_data(df_to_process, chunk_size=500)
         emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
         features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
@@ -461,5 +492,9 @@ class Routine():
         no_match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match.csv'))
         display(no_match_stat)
         res_df_no_match = res_df
+        no_match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(['size', 'mean', 'median', 'min', 'max'])
+        no_match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match_mean_delta.csv'))
 
+        res_df_match.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match_combinations.csv'))
+        res_df_no_match.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match_combinations.csv'))
         return res_df_match, res_df_no_match

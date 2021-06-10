@@ -436,10 +436,23 @@ class Evaluate_explanation(Landmark):
         comb_name_sequence = []
         tokens_to_remove_sequence = []
         for comb_name, combinations in combinations_to_remove.items():
+            sign = None
+            if comb_name.startswith('neg'):
+                sign = False
+            elif comb_name.startswith('pos'):
+                sign = True
             for tokens_to_remove in combinations:
+                enough_tokens = True
                 tmp_encoded = self.variable_encoded
-                while len(tokens_to_remove) > 0 and max(tokens_to_remove) >= self.words_with_prefixes.shape[0]:
-                    del tokens_to_remove[np.argmax(tokens_to_remove)]
+                if len(tokens_to_remove) > 0 and max(tokens_to_remove) >= self.words_with_prefixes.shape[0]:
+                    enough_tokens = False
+                if sign is not None and enough_tokens is True:
+                    for i, t in enumerate(tokens_to_remove):
+                        if (self.impacts[t] > 0) != sign:
+                            enough_tokens = False
+                            break
+                if enough_tokens is False:
+                    continue
                 turn_words = self.words_with_prefixes[tokens_to_remove]
                 for token_with_prefix in turn_words:
                     tmp_encoded = tmp_encoded.replace(str(token_with_prefix), '')
@@ -470,7 +483,7 @@ class Evaluate_explanation(Landmark):
             correct = (new_pred > .5) == ((self.start_pred - np.sum(self.impacts[tokens_to_remove])) > .5)
             evaluation.update(comb_name=comb_name, new_pred=new_pred, correct=correct,
                               expected_delta=np.sum(self.impacts[tokens_to_remove]),
-                              detected_delta=-(new_pred - self.start_pred),
+                              detected_delta=self.start_pred - new_pred,
                               tokens_removed=list(self.words_with_prefixes[tokens_to_remove]))
             res_list.append(evaluation.copy())
         return res_list
@@ -489,9 +502,16 @@ class Evaluate_explanation(Landmark):
         change_class_tokens = self.get_tokens_to_change_class(self.start_pred, self.impacts)
         combinations_to_remove = {#'change_class': [change_class_tokens],
                                   #'single_word': [[x] for x in np.arange(self.impacts.shape[0])],
-                                  'all_opposite': [[pos for pos, impact in enumerate(self.impacts) if
-                                                    (impact > 0) == (self.start_pred > .5)]],
-            'firstK': [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3, 4]]
+                                  # 'all_opposite': [[pos for pos, impact in enumerate(self.impacts) if
+                                  #                   (impact > 0) == (self.start_pred > .5)]],
+            'pos1': [[0]],
+            'pos2': [[0, 1]],
+            'pos3': [[0, 1, 2]],
+            'pos5': [[0, 1, 2, 3, 4]],
+            'neg1': [[-1]],
+            'neg2': [[-1, -2]],
+            'neg3': [[-1, -2, -3]],
+            'neg5': [[-1, -2, -3, -4, -5]]
         }
 
 
@@ -506,7 +526,7 @@ class Evaluate_explanation(Landmark):
             correct = (new_pred > .5) == ((self.start_pred - np.sum(self.impacts[tokens_to_remove])) > .5)
             evaluation.update(comb_name=comb_name, new_pred=new_pred, correct=correct,
                               expected_delta=np.sum(self.impacts[tokens_to_remove]),
-                              detected_delta=-(new_pred - self.start_pred),
+                              detected_delta=self.start_pred - new_pred,
                               tokens_removed=list(self.words_with_prefixes[tokens_to_remove]))
             res_list.append(evaluation.copy())
         return res_list

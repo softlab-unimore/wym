@@ -21,25 +21,24 @@ class EMFeatures:
 class WordPairGenerator(EMFeatures):
     word_pair_empty = {'left_word': [], 'right_word': [], 'cos_sim': [], 'left_attribute': [],
                        'right_attribute': []}
-    unpair_threshold = 0.45
+    unpair_threshold = 0.55
     cross_attr_threshold = .55
+    duplicate_threshold = .75
     zero_emb = torch.zeros(1, 768)
 
     def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=None,
-                     cross_attr_threshold=None,
-                     duplicate_threshold=.75, verbose=False, **kwargs):
+                 cross_attr_threshold=None,
+                 duplicate_threshold=None, verbose=False, **kwargs):
         super().__init__(**kwargs)
         self.words = words
         self.embeddings = embeddings
         self.use_schema = use_schema
         self.unpair_threshold = unpair_threshold if unpair_threshold is not None else WordPairGenerator.unpair_threshold
         self.cross_attr_threshold = cross_attr_threshold if cross_attr_threshold is not None else WordPairGenerator.cross_attr_threshold
-        self.duplicate_threshold = duplicate_threshold
+        self.duplicate_threshold = duplicate_threshold if duplicate_threshold is not None else WordPairGenerator.duplicate_threshold
         self.words_divided = words_divided
         self.verbose = verbose
         self.unpair_threshold
-
-
 
     def get_word_pairs(self, df, data_dict):
         word_dict_list = []
@@ -161,8 +160,9 @@ class WordPairGenerator(EMFeatures):
         return pairs, sim
 
     @staticmethod
-    def most_similar_pairs(sim_mat, duplicate_threshold=.75, unpair_threshold=None):
+    def most_similar_pairs(sim_mat, duplicate_threshold=None, unpair_threshold=None):
         unpair_threshold = unpair_threshold if unpair_threshold is not None else WordPairGenerator.unpair_threshold
+        duplicate_threshold = duplicate_threshold if duplicate_threshold is not None else WordPairGenerator.duplicate_threshold
 
         row_el = np.arange(sim_mat.shape[0])
         col_el = np.arange(sim_mat.shape[1])
@@ -226,17 +226,14 @@ class WordPairGenerator(EMFeatures):
                     el_words[prefix + col] = str(record[col].values[0]).split()
         return el_words
 
-    def generate_pairs(self, words_l, words_r, emb_l, emb_r, return_pairs=False, unpair_threshold=None):
-        unpair_threshold = unpair_threshold if unpair_threshold is not None else WordPairGenerator.unpair_threshold
+    def generate_pairs(self, words_l, words_r, emb_l, emb_r, return_pairs=False, unpair_threshold=None,
+                       duplicate_threshold=None):
+        unpair_threshold = unpair_threshold if unpair_threshold is not None else self.unpair_threshold
+        duplicate_threshold = duplicate_threshold if duplicate_threshold is not None else self.duplicate_threshold
 
         if len(words_r) == 0 and len(words_l) == 0:
-            pairs = []
-            sim = []
-            word_pair = {'left_word': [],
-                         'right_word': [],
-                         'cos_sim': sim}
-            ret_emb = []
-
+            pairs, sim, ret_emb = [], [], []
+            word_pair = {'left_word': [], 'right_word': [], 'cos_sim': sim}
         else:
             if len(words_l) == 0:
                 pairs = np.array([[-1, x] for x in range(len(words_r))])
@@ -249,22 +246,21 @@ class WordPairGenerator(EMFeatures):
             else:
                 sim_mat = WordPairGenerator.cos_sim_set(emb_l.cpu(), emb_r.cpu())
                 pairs, sim = WordPairGenerator.most_similar_pairs(sim_mat.cpu(),
-                                                                  duplicate_threshold=self.duplicate_threshold,
+                                                                  duplicate_threshold=duplicate_threshold,
                                                                   unpair_threshold=unpair_threshold)
             words_l, words_r = np.concatenate([words_l, ['[UNP]']]), np.concatenate([words_r, ['[UNP]']])
             emb_l = torch.cat([emb_l.to(self.device), WordPairGenerator.zero_emb.to(self.device)], 0).to(self.device)
             emb_r = torch.cat([emb_r.to(self.device), WordPairGenerator.zero_emb.to(self.device)], 0).to(self.device)
             # print(f'wl: {words_l} \nwr:{words_r} \n {emb_l.shape} -- {emb_r.shape} \n {pairs},{sim}')
 
-            word_pair = {'left_word': words_l[pairs[:, 0]].reshape([-1]), 'right_word': words_r[pairs[:, 1]].reshape([-1]),
+            word_pair = {'left_word': words_l[pairs[:, 0]].reshape([-1]),
+                         'right_word': words_r[pairs[:, 1]].reshape([-1]),
                          'cos_sim': sim}
             ret_emb = torch.stack([emb_l[pairs[:, 0]], emb_r[pairs[:, 1]]]).permute(1, 0, 2)
         if return_pairs:
             return word_pair, ret_emb, pairs
         else:
             return word_pair, ret_emb
-
-
 
     def embedding_pairs(self, el, emb1=None, emb2=None, words1=None, words2=None, left_words_map=None,
                         right_words_map=None):
@@ -280,7 +276,9 @@ class WordPairGenerator(EMFeatures):
             # assert len(words1) == np.sum([len(x) for x in left_words.values() if x != ['']]), [words1, left_words]
             # assert len(words2) == np.sum([len(x) for x in right_words_map.values() if x != ['']]), [words2, right_words_map]
             # assert words2[0] == list(right_words_map.values())[0][0], [words2[0], list(right_words_map.values())]
+
             unpaired_words = deepcopy(WordPairGenerator.word_pair_empty)
+            unpaired_words.update(left_pos=[], right_pos=[])
             unpaired_emb = {'left': [], 'right': []}
             word_pair = deepcopy(WordPairGenerator.word_pair_empty)
             emb_pair = []
@@ -288,10 +286,11 @@ class WordPairGenerator(EMFeatures):
             tmp_words = {}
             tmp_emb = {}
             for col in left_words_map.keys():
+                turn_start = deepcopy(start_pos)
                 for side in ['left', 'right']:
                     start = start_pos[side]
                     words_list, word_map, emb = (words1, left_words_map, emb1) if side == 'left' else (
-                    words2, right_words_map, emb2)
+                        words2, right_words_map, emb2)
                     indexes = [words_list[start:].index(x) for x in word_map[col]]
                     if len(indexes) > 0:
                         indexes = np.array(indexes) + start
@@ -301,21 +300,19 @@ class WordPairGenerator(EMFeatures):
                     else:
                         tmp_words[side] = []
                         tmp_emb[side] = WordPairGenerator.zero_emb
-
-                tmp_word_pairs, tmp_emb_pairs = self.generate_pairs(tmp_words['left'], tmp_words['right'],
-                                                                    tmp_emb['left'], tmp_emb['right'])
-                if len(tmp_emb_pairs)> 0:
+                tmp_word_pairs, tmp_emb_pairs, pairs = self.generate_pairs(tmp_words['left'], tmp_words['right'],
+                                                                           tmp_emb['left'], tmp_emb['right'],
+                                                                           return_pairs=True,
+                                                                           duplicate_threshold=1.1)
+                if len(tmp_emb_pairs) > 0:
                     paired_idx = []
-                    for i, (w_l, w_r, emb) in enumerate(
-                            zip(tmp_word_pairs['left_word'], tmp_word_pairs['right_word'], tmp_emb_pairs)):
-                        if w_l == '[UNP]' and w_r != '[UNP]':
-                            unpaired_words['right_word'].append(w_r)
+                    for i, (l, r) in enumerate(pairs):
+                        if l == -1 and r != -1:
+                            unpaired_words['right_pos'].append(r + turn_start['right'])
                             unpaired_words['right_attribute'].append(col)
-                            unpaired_emb['right'].append(emb[1])
-                        elif w_r == '[UNP]' and w_l != '[UNP]':
-                            unpaired_words['left_word'].append(w_l)
+                        elif l != -1 and r == -1:
+                            unpaired_words['left_pos'].append(l + turn_start['left'])
                             unpaired_words['left_attribute'].append(col)
-                            unpaired_emb['left'].append(emb[0])
                         else:
                             paired_idx.append(i)
                     emb_pair.append(tmp_emb_pairs[paired_idx].cpu())
@@ -330,18 +327,60 @@ class WordPairGenerator(EMFeatures):
             # First pair unpaired of left with all words of right
             # Then pair unpaired of right with all words of left
 
+            l_emb_unp = emb1[unpaired_words['left' + '_pos']] if len(
+                unpaired_words['left' + '_pos']) > 0 else WordPairGenerator.zero_emb
+            r_emb_unp = emb2[unpaired_words['right' + '_pos']] if len(
+                unpaired_words['right' + '_pos']) > 0 else WordPairGenerator.zero_emb
+            words_l, words_r = np.array(words1)[unpaired_words['left_pos']], np.array(words2)[
+                unpaired_words['right_pos']]
+            unpaired_words['left_word'] = words_l
+            unpaired_words['right_word'] = words_r
+            unpaired_emb['left'] = l_emb_unp
+            unpaired_emb['right'] = r_emb_unp
+            if len(l_emb_unp) > 0 and len(r_emb_unp) > 0:
+                tmp_word_pairs, tmp_emb_pairs, pairs = self.generate_pairs(words_l, words_r, l_emb_unp, r_emb_unp,
+                                                                           return_pairs=True)
+                new_unpaired_words = deepcopy(WordPairGenerator.word_pair_empty)
+                new_unpaired_words.update(left_pos=[], right_pos=[])
+                if len(tmp_emb_pairs) > 0:
+                    paired_idx = []
+                    for i, (l, r) in enumerate(pairs):
+                        if l == -1 and r != -1:
+                            new_unpaired_words['right_pos'].append(r)
+                            new_unpaired_words['right_attribute'].append(unpaired_words['right_attribute'][r])
+                        elif l != -1 and r == -1:
+                            new_unpaired_words['left_pos'].append(l)
+                            new_unpaired_words['left_attribute'].append(unpaired_words['left_attribute'][l])
+                        else:
+                            paired_idx.append(i)
+                    emb_pair = torch.cat([emb_pair, tmp_emb_pairs[paired_idx].cpu()])
+                    for key in tmp_word_pairs.keys():
+                        word_pair[key] = np.concatenate([word_pair[key], np.array(tmp_word_pairs[key])[paired_idx]])
+                    for side in ['left', 'right']:
+                        paired_elements = pairs[paired_idx][:, 0 if side == 'left' else 1]
+                        tmp_attr = np.array(unpaired_words[side + '_attribute'])[paired_elements]
+                        word_pair[side + '_attribute'] = np.concatenate([word_pair[side + '_attribute'], tmp_attr])
+
+                for side in ['left', 'right']:
+                    new_unpaired_words[side + '_word'] = unpaired_words[side + '_word'][
+                        new_unpaired_words[side + '_pos']]
+                    unpaired_emb[side] = unpaired_emb[side][new_unpaired_words[side + '_pos']]
+                unpaired_words = new_unpaired_words
+
+            self.duplicate_threshold = 0.75
             for all_side, unp_side in zip(['left', 'right'], ['right', 'left']):
                 words_map = right_words_map if all_side == 'right' else left_words_map
                 pos_to_attr_map = WordPairGenerator.get_attr_map(words_map)
-                emb_unp = torch.stack(unpaired_emb[unp_side]) if len(
+                emb_unp = unpaired_emb[unp_side] if len(
                     unpaired_words[unp_side + '_word']) > 0 else WordPairGenerator.zero_emb
                 if all_side == 'right':
                     tmp_word_pairs, tmp_emb, pairs = self.generate_pairs(unpaired_words[unp_side + '_word'], words2,
-                                                                         emb_unp, emb2, unpair_threshold=WordPairGenerator.cross_attr_threshold,
-                                                                         return_pairs=True)
+                                                                         emb_unp, emb2, return_pairs=True,
+                                                                         unpair_threshold=self.cross_attr_threshold)
                 elif all_side == 'left':
                     tmp_word_pairs, tmp_emb, pairs = self.generate_pairs(words1, unpaired_words[unp_side + '_word'],
-                                                                         emb1, emb_unp, unpair_threshold=WordPairGenerator.cross_attr_threshold,
+                                                                         emb1, emb_unp,
+                                                                         unpair_threshold=self.cross_attr_threshold,
                                                                          return_pairs=True)
                 side_mask = np.array(tmp_word_pairs[unp_side + '_word']) != '[UNP]'
                 for key in tmp_word_pairs.keys():
@@ -353,7 +392,8 @@ class WordPairGenerator(EMFeatures):
                     pairs[side_mask][:, 1 if unp_side == 'right' else 0]]
                 word_pair[unp_side + '_attribute'] = np.concatenate([word_pair[unp_side + '_attribute'], unp_attr])
                 emb_pair = torch.cat([emb_pair.cpu(), tmp_emb[side_mask].cpu()])
-                for key in word_pair.keys():
+
+                for key in word_pair.keys(): # TODO remove in production
                     assert len(word_pair[key]) == len(
                         word_pair['left_word']), f'{key} --> {len(word_pair[key])} != {len(word_pair["left_word"])}'
             return word_pair, emb_pair
