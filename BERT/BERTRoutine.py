@@ -35,6 +35,7 @@ from Net import DatasetAccoppiate, NetAccoppiate, train_model
 from WordEmbedding import WordEmbedding
 from WordPairGenerator import WordPairGenerator
 from Evaluation import evaluate_df
+from Modelling import feature_importance
 
 
 class Routine():
@@ -346,25 +347,25 @@ class Routine():
                 best_model = x[1]
 
         # Feature selection
-        score_df = {'feature': [], 'score': []}
         print('running feature score')
-        for feat in tqdm(self.features_dict['train'].columns):
-            score_df['feature'].append(feat)
-            X_train, y_train = self.features_dict['train'][[feat]].to_numpy(), self.train.label.astype(int)
-            X_valid, y_valid = self.features_dict['valid'][[feat]].to_numpy(), self.valid.label.astype(int) #
+        score_df = {'feature': [], 'score': []}
+        X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
+        X_test, y_test = self.features_dict['valid'], self.valid.label.astype(int)
 
-            model = LogisticRegression(random_state=0)
-            model.fit(X_train, y_train)
-            pred = model.predict(X_valid)
-            score_df['score'].append(f1_score(y_valid, pred))
-        score_df = pd.DataFrame(score_df)
-        score_df = score_df.set_index('feature')
-        score_df.plot(kind='bar', title='Feature importances');
-        selected_features = score_df[score_df['score'] > score_df['score'].quantile(quantile_threshold)].index
+        cols = self.features_dict['train'].columns
+        new_cols = cols
+        different = True
+        while different:
+            cols = new_cols
+            score_df, res_df, new_cols = feature_importance(X_train, y_train, X_test, y_test, cols)
+            different = len(cols) != len(new_cols)
 
-        X_train, y_train = self.features_dict['train'][selected_features].to_numpy(), self.train.label.astype(int)
-        X_test, y_test = self.features_dict['test'][selected_features].to_numpy(), self.test.label.astype(int)
+        self.score_df = score_df
+        self.res_df = res_df
+        selected_features = new_cols
 
+
+        X_test, y_test = self.features_dict['test'], self.test.label.astype(int)
         res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
         print('Running models')
         for name, model in tqdm(self.models):
