@@ -303,7 +303,8 @@ class Routine():
         data_loader.__init__(word_pairs, emb_pairs)
         word_pair_corrected = data_loader.word_pairs_corrected
         word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
-        features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
+        # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
+        features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
         return features, word_pair_corrected
 
     def EM_modelling(self,  *args, quantile_threshold=0.45):

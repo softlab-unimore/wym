@@ -47,7 +47,93 @@ class FeatureExtractorGeneral:
 class FeatureExtractor(FeatureExtractorGeneral):
 
     @staticmethod
-    def extract_features(word_pairs_df:pd.DataFrame, complementary=True, pos_threshold=.45, null_value=0.5):
+    def extract_features_by_attr(word_pairs_df: pd.DataFrame, attributes,  complementary=True, pos_threshold=.5, null_value=0.5):
+        stat_list = []
+        # for attr in attributes:
+        #     tmp_pairs = word_pairs_df.query(f'left_attribute == "{attr}" & right_attribute == "{attr}"')
+        #     tmp_stat = FeatureExtractor.extract_features(tmp_pairs, complementary, pos_threshold, null_value)
+        #     stat.append(tmp_stat)
+        # tmp_pairs = word_pairs_df.query(f'left_attribute != right_attribute')
+        # tmp_stat = FeatureExtractor.extract_features(tmp_pairs, complementary, pos_threshold, null_value)
+        # stat.append(tmp_stat)
+
+        # OR no mixed attr but a measure for each attribute divided by left and right
+        for side in ['left','right']:
+            for attr in attributes:
+
+                tmp_pairs = word_pairs_df.query(f'{side}_attribute == "{attr}"')
+                tmp_stat = FeatureExtractor.extract_features_simplified(tmp_pairs, complementary, pos_threshold, null_value)
+                tmp_stat.columns = tmp_stat.columns + f'_{side}_{attr}'
+                stat_list.append(tmp_stat)
+        # plus overlall features
+        tmp_stat = FeatureExtractor.extract_features(word_pairs_df, complementary, pos_threshold, null_value)
+        tmp_stat.columns = tmp_stat.columns + f'_allattr'
+        stat_list.append(tmp_stat)
+        return pd.concat(stat_list, 1).fillna(null_value)
+
+    @staticmethod
+    def extract_features_simplified(word_pairs_df: pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0.5):
+        functions = ['mean', 'sum', 'min', 'max', ('M-m', lambda x: x.max() - x.min())]
+        function_names = ['mean', 'sum', 'min', 'max', 'M-m']
+
+        neg_mask = (word_pairs_df.pred < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
+                    word_pairs_df.right_word == '[UNP]')
+        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+
+        paired_stat = com_df.groupby(['id'])['pred'].agg(functions)
+        paired_stat.columns += '_paired'
+
+        tmp = non_com_df.copy()
+        tmp['comp_pred'] = (1 - tmp['pred']) if complementary else tmp['pred']
+        # tmp['side'] = np.where((tmp.left_word == '[UNP]') | (tmp.right_word == '[UNP]'), 'exclusive', 'both')
+        # stat = tmp.groupby(['id', 'side'])['comp_pred'].agg(functions)
+        # unpaired_stat = stat.unstack(1)
+        # unpaired_stat.columns = ['_unpaired_'.join(col) for col in unpaired_stat.columns]
+        # if 'mean_unpaired_both' not in unpaired_stat.columns:
+        #     for col in function_names:
+        #         unpaired_stat[col + '_unpaired_both'] = null_value
+        # if 'mean_unpaired_exclusive' not in unpaired_stat.columns:
+        #     for col in function_names:
+        #         unpaired_stat[col + '_unpaired_exclusive'] = null_value
+        # unpaired_stat = unpaired_stat.fillna(null_value)
+        # unpaired_stat.index.name = 'id'
+
+        stat = (tmp.groupby(['id'])['comp_pred']).agg(functions)
+        unpaired_stat_full = stat
+        unpaired_stat_full = unpaired_stat_full.fillna(0)
+        unpaired_stat_full.columns += '_unpaired'
+
+        # tmp = word_pairs_df[(word_pairs_df.left_word == '[UNP]') | (word_pairs_df.right_word == '[UNP]')].copy()
+        # tmp['comp_pred'] = (1 - tmp['pred']) if complementary else tmp['pred']
+        # tmp['side'] = np.where((tmp.left_word == '[UNP]'), 'left', 'right')
+        # stat = (tmp.groupby(['id', 'side'])['comp_pred']).agg(functions)
+        # side_stat = stat.unstack(1)
+        # side_stat.columns = ['_'.join(col) for col in side_stat.columns]
+        # side_stat = side_stat.fillna(null_value)
+        # side_stat = FeatureExtractorGeneral.compute_min_max_features(side_stat, function_names, null_value=null_value)
+
+        # try:
+        stat = paired_stat
+        for df in [unpaired_stat_full]:
+            stat = stat.join(df, on='id', how='outer').sort_index()
+            if 'id' in stat.columns:
+                stat = stat.set_index('id')
+        # except Exception as e:
+        #     print(e)
+        #     for i, df in enumerate([paired_stat, unpaired_stat, unpaired_stat_full, all_stat, side_stat]):
+        #         print(i)
+        #         display(df)
+        # .merge(unpaired_stat, on='id', how='outer')
+        stat = FeatureExtractor().compute_derived_features(stat,
+                                                           function_names,
+                                                           possible_unpaired=[''])
+        if 'id' in stat.columns:
+            stat = stat.set_index('id')
+        stat = stat.sort_index()
+        return stat
+
+    @staticmethod
+    def extract_features(word_pairs_df:pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0.5):
         functions = ['mean', 'sum', 'count', 'min', 'max', ('M-m', lambda x : x.max() - x.min()), 'median']
         function_names = ['mean', 'sum', 'count', 'min', 'max', 'M-m', 'median']
         all_stat = word_pairs_df.groupby(['id'])['pred'].agg(functions)
