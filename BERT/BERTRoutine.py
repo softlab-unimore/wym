@@ -78,8 +78,10 @@ class Routine():
         self.train = pd.read_csv(os.path.join(dataset_path, 'train_merged.csv'))
         self.test = pd.read_csv(os.path.join(dataset_path, 'test_merged.csv'))
         self.valid = pd.read_csv(os.path.join(dataset_path, 'valid_merged.csv'))
-        self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv')).drop(col_to_drop, 1)
-        self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv')).drop(col_to_drop, 1)
+        if not hasattr(self,'table_A'):
+            self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv')).drop(col_to_drop, 1)
+        if not hasattr(self,'table_B'):
+            self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv')).drop(col_to_drop, 1)
 
 
         left_ids = []
@@ -119,6 +121,7 @@ class Routine():
 
         self.table_A = self.table_A.replace('None', np.nan).replace('nan', np.nan)
         self.table_B = self.table_B.replace('None', np.nan).replace('nan', np.nan)
+
         self.words_divided = {}
         tmp_path = os.path.join(self.model_files_path, 'words_maps.pickle')
         try:
@@ -348,47 +351,47 @@ class Routine():
                 best_model = x[1]
 
         # Feature selection
-        print('running feature score')
-        score_df = {'feature': [], 'score': []}
-        X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
-        X_test, y_test = self.features_dict['valid'], self.valid.label.astype(int)
-
-        cols = self.features_dict['train'].columns
-        new_cols = cols
-        different = True
-        while different:
-            cols = new_cols
-            score_df, res_df, new_cols = feature_importance(X_train, y_train, X_test, y_test, cols)
-            different = len(cols) != len(new_cols)
-
-        self.score_df = score_df
-        self.res_df = res_df
-        selected_features = new_cols
-
-
-        X_test, y_test = self.features_dict['test'], self.test.label.astype(int)
-        res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
-        print('Running models')
-        for name, model in tqdm(self.models):
-            model.fit(X_train, y_train)
-            for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-                res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
-                res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
-        self.models = self.models
-        res_df = pd.DataFrame(res, index=model_names)
-        res_df.index.name = 'model_name'
-        display(res_df)
-
-
-        if best_f1 < res_df[('test', 'f1')].max():
-            best_f1 = res_df[('test', 'f1')].max()
-            best_features = selected_features
-            best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
-            for x in self.models:
-                if x[0] == best_model_name:
-                    best_model = x[1]
-
-            res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
+        # print('running feature score')
+        # score_df = {'feature': [], 'score': []}
+        # X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
+        # X_test, y_test = self.features_dict['valid'], self.valid.label.astype(int)
+        #
+        # cols = self.features_dict['train'].columns
+        # new_cols = cols
+        # different = True
+        # while different:
+        #     cols = new_cols
+        #     score_df, res_df, new_cols = feature_importance(X_train, y_train, X_test, y_test, cols)
+        #     different = len(cols) != len(new_cols)
+        #
+        # self.score_df = score_df
+        # self.res_df = res_df
+        # selected_features = new_cols
+        #
+        # X_train, y_train = self.features_dict['train'][selected_features], self.train.label.astype(int)
+        # X_test, y_test = self.features_dict['test'][selected_features], self.test.label.astype(int)
+        # res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
+        # print('Running models')
+        # for name, model in tqdm(self.models):
+        #     model.fit(X_train, y_train)
+        #     for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
+        #         res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
+        #         res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
+        # self.models = self.models
+        # res_df = pd.DataFrame(res, index=model_names)
+        # res_df.index.name = 'model_name'
+        # display(res_df)
+        #
+        #
+        # if best_f1 < res_df[('test', 'f1')].max():
+        #     best_f1 = res_df[('test', 'f1')].max()
+        #     best_features = selected_features
+        #     best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
+        #     for x in self.models:
+        #         if x[0] == best_model_name:
+        #             best_model = x[1]
+        #
+        #     res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
 
         X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
         best_model.fit(X_train, y_train)
