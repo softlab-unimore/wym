@@ -88,6 +88,6 @@ def feature_importance(X_train, y_train, X_test, y_test, cols):
     res_df = pd.DataFrame(res_dict)
     display(res_df)
     max = res_df.loc[:, 'f1'].max()
-    best_threshold = res_df[res_df['f1'] == max].iloc[0]['q']
+    best_threshold = res_df[res_df['f1'] == max].iloc[-1]['q']
     new_cols = score_df[score_df['score'] >= best_threshold].index
     return score_df, res_df, new_cols

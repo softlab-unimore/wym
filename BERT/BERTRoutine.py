@@ -1,9 +1,9 @@
-from functools import partial
 import copy
 import gc
 import os
 import pickle
 import sys
+from functools import partial
 from warnings import simplefilter
 
 import matplotlib.pyplot as plt
@@ -12,9 +12,10 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from IPython.display import display
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import AdaBoostClassifier, VotingClassifier
+from sklearn.ensemble import AdaBoostClassifier
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -28,14 +29,13 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
-from IPython.display import display
 
+from Evaluation import evaluate_df
 from FeatureExtractor import FeatureExtractor
+from Modelling import feature_importance
 from Net import DatasetAccoppiate, NetAccoppiate, train_model
 from WordEmbedding import WordEmbedding
 from WordPairGenerator import WordPairGenerator
-from Evaluation import evaluate_df
-from Modelling import feature_importance
 
 
 class Routine():
@@ -78,11 +78,10 @@ class Routine():
         self.train = pd.read_csv(os.path.join(dataset_path, 'train_merged.csv'))
         self.test = pd.read_csv(os.path.join(dataset_path, 'test_merged.csv'))
         self.valid = pd.read_csv(os.path.join(dataset_path, 'valid_merged.csv'))
-        if not hasattr(self,'table_A'):
+        if not hasattr(self, 'table_A'):
             self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv')).drop(col_to_drop, 1)
-        if not hasattr(self,'table_B'):
+        if not hasattr(self, 'table_B'):
             self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv')).drop(col_to_drop, 1)
-
 
         left_ids = []
         right_ids = []
@@ -113,7 +112,7 @@ class Routine():
                 for char in spec_chars:
                     self.table_A[col] = self.table_A[col].str.replace(' \\' + char + ' ', ' ')
                     self.table_B[col] = self.table_B[col].str.replace(' \\' + char + ' ', ' ')
-                for char in ['-','/','\\']:
+                for char in ['-', '/', '\\']:
                     self.table_A[col] = self.table_A[col].str.replace(char, ' ')
                     self.table_B[col] = self.table_B[col].str.replace(char, ' ')
                 self.table_A[col] = self.table_A[col].str.split().str.join(" ").str.lower()
@@ -128,7 +127,7 @@ class Routine():
             assert self.reset_files == False, 'Reset_files'
             with open(tmp_path, 'rb') as file:
                 self.words_divided = pickle.load(file)
-            print('Loaded '+tmp_path)
+            print('Loaded ' + tmp_path)
         except Exception as e:
             print(e)
             for name, df in zip(['table_A', 'table_B'], [self.table_A, self.table_B]):
@@ -136,7 +135,7 @@ class Routine():
             with open(tmp_path, 'wb') as file:
                 pickle.dump(self.words_divided, file)
 
-        tmp_cols = ['id', 'left_id', 'right_id','label']
+        tmp_cols = ['id', 'left_id', 'right_id', 'label']
         self.train_merged = pd.merge(
             pd.merge(self.train[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
@@ -146,16 +145,14 @@ class Routine():
         self.valid_merged = pd.merge(
             pd.merge(self.valid[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
-        for col, type in zip(['id','label'],['UInt32','UInt8']):
+        for col, type in zip(['id', 'label'], ['UInt32', 'UInt8']):
             self.train_merged[col] = self.train_merged[col].astype(type)
             self.valid_merged[col] = self.valid_merged[col].astype(type)
             self.test_merged[col] = self.test_merged[col].astype(type)
 
-
         self.train = self.train_merged
         self.valid = self.valid_merged
         self.test = self.test_merged
-
 
     def generate_df_embedding(self, chunk_size=500):
         self.embeddings = {}
@@ -165,7 +162,7 @@ class Routine():
             for df_name in ['table_A', 'table_B']:
                 tmp_path = os.path.join(self.model_files_path, 'emb_' + df_name + '.csv')
                 with open(tmp_path, 'rb') as file:
-                    self.embeddings[df_name] = torch.load(file,map_location=torch.device(self.device) )
+                    self.embeddings[df_name] = torch.load(file, map_location=torch.device(self.device))
                 tmp_path = os.path.join(self.model_files_path, 'words_list_' + df_name + '.csv')
                 with open(tmp_path, 'rb') as file:
                     self.words[df_name] = pickle.load(file)
@@ -190,18 +187,18 @@ class Routine():
     def get_processed_data(self, df, chunk_size=500, verbose=False):
         we = self.we
         res = {}
-        for side in ['left','right']:
+        for side in ['left', 'right']:
             if verbose:
                 print(f'Embedding {side} side')
             prefix = self.lp if side == 'left' else self.rp
-            cols =[prefix + col for col in self.cols]
+            cols = [prefix + col for col in self.cols]
             tmp_df = df.loc[:, cols]
-            res[side+'_word_map'] = WordPairGenerator.map_word_to_attr(tmp_df, self.cols, prefix=prefix, verbose=self.verbose)
+            res[side + '_word_map'] = WordPairGenerator.map_word_to_attr(tmp_df, self.cols, prefix=prefix,
+                                                                         verbose=self.verbose)
             emb, words = we.generate_embedding(tmp_df, chunk_size=chunk_size)
             res[side + '_emb'] = emb
             res[side + '_words'] = words
         return res
-
 
     def compute_word_pair(self, use_schema=True, **kwargs):
         words_pairs_dict, emb_pairs_dict = {}, {}
@@ -219,7 +216,8 @@ class Routine():
             print(e)
 
             word_pair_generator = WordPairGenerator(self.words, self.embeddings, self.words_divided, df=self.test,
-                                                    use_schema=use_schema, device=self.device, verbose=self.verbose, **kwargs)
+                                                    use_schema=use_schema, device=self.device, verbose=self.verbose,
+                                                    **kwargs)
             for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
                 word_pairs, emb_pairs = word_pair_generator.process_df(df)
                 tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
@@ -236,12 +234,13 @@ class Routine():
         return words_pairs_dict, emb_pairs_dict
 
     def get_word_pairs(self, df, data_dict, use_schema=True, **kwargs):
-        wp = WordPairGenerator(df =df, use_schema=use_schema, device=self.device, verbose=self.verbose, **kwargs)
-        word_pairs, emb_pairs = wp.get_word_pairs(df,data_dict)
+        wp = WordPairGenerator(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose, **kwargs)
+        word_pairs, emb_pairs = wp.get_word_pairs(df, data_dict)
         word_pairs = pd.DataFrame(word_pairs)
         return emb_pairs, word_pairs
 
-    def net_train(self, num_epochs=50, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None, valid_pairs=None, valid_emb=None):
+    def net_train(self, num_epochs=50, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None, valid_pairs=None,
+                  valid_emb=None):
         if word_pairs is None or emb_pairs is None:
             word_pairs = self.words_pairs_dict['train']
             emb_pairs = self.emb_pairs_dict['train']
@@ -255,7 +254,7 @@ class Routine():
         tmp_path = os.path.join(self.model_files_path, 'net0.pickle')
         try:
             assert self.reset_networks == False, 'resetting networks'
-            best_model.load_state_dict(torch.load(tmp_path,map_location=torch.device(device)))
+            best_model.load_state_dict(torch.load(tmp_path, map_location=torch.device(device)))
         except Exception as e:
             print(e)
             net = NetAccoppiate()
@@ -293,7 +292,7 @@ class Routine():
         words_pairs_dict = {}
         for name in ['train', 'valid', 'test']:
             feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
-                                                          self.emb_pairs_dict[name], self.train_data_loader, **kwargs)
+                                                     self.emb_pairs_dict[name], self.train_data_loader, **kwargs)
             features_dict[name] = feat
             words_pairs_dict[name] = word_pairs
         self.features_dict, self.words_pairs_dict = features_dict, words_pairs_dict
@@ -310,23 +309,23 @@ class Routine():
         features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
         return features, word_pair_corrected
 
-    def EM_modelling(self,  *args, quantile_threshold=0.45):
+    def EM_modelling(self, *args, do_feature_selection=False):
 
         if hasattr(self, 'models') == False:
             self.models = [
-                  ('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
-                  ('LDA', Pipeline([('mm', MinMaxScaler()), ('LDA', LinearDiscriminantAnalysis())])),
-                  ('KNN', Pipeline([('mm', MinMaxScaler()), ('KNN', KNeighborsClassifier())])),
-                  ('CART', DecisionTreeClassifier(random_state=0)),
-                  ('NB', GaussianNB()),
-                  ('SVM', Pipeline([('mm', MinMaxScaler()), ('SVM', SVC(probability=True, random_state=0))])),
-                  ('AB', AdaBoostClassifier(random_state=0)),
-                  ('GBM', GradientBoostingClassifier(random_state=0)),
-                  ('RF', RandomForestClassifier(random_state=0)),
-                  ('ET', ExtraTreesClassifier(random_state=0)),
-                  ('dummy', DummyClassifier(strategy='stratified', random_state=0)),
-                  ]
-        #models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
+                ('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
+                ('LDA', Pipeline([('mm', MinMaxScaler()), ('LDA', LinearDiscriminantAnalysis())])),
+                ('KNN', Pipeline([('mm', MinMaxScaler()), ('KNN', KNeighborsClassifier())])),
+                ('CART', DecisionTreeClassifier(random_state=0)),
+                ('NB', GaussianNB()),
+                ('SVM', Pipeline([('mm', MinMaxScaler()), ('SVM', SVC(probability=True, random_state=0))])),
+                ('AB', AdaBoostClassifier(random_state=0)),
+                ('GBM', GradientBoostingClassifier(random_state=0)),
+                ('RF', RandomForestClassifier(random_state=0)),
+                ('ET', ExtraTreesClassifier(random_state=0)),
+                ('dummy', DummyClassifier(strategy='stratified', random_state=0)),
+            ]
+        # models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
         model_names = [x[0] for x in self.models]
 
         X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label.astype(int)
@@ -351,51 +350,53 @@ class Routine():
                 best_model = x[1]
 
         # Feature selection
-        # print('running feature score')
-        # score_df = {'feature': [], 'score': []}
-        # X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
-        # X_test, y_test = self.features_dict['valid'], self.valid.label.astype(int)
-        #
-        # cols = self.features_dict['train'].columns
-        # new_cols = cols
-        # different = True
-        # while different:
-        #     cols = new_cols
-        #     score_df, res_df, new_cols = feature_importance(X_train, y_train, X_test, y_test, cols)
-        #     different = len(cols) != len(new_cols)
-        #
-        # self.score_df = score_df
-        # self.res_df = res_df
-        # selected_features = new_cols
-        #
-        # X_train, y_train = self.features_dict['train'][selected_features], self.train.label.astype(int)
-        # X_test, y_test = self.features_dict['test'][selected_features], self.test.label.astype(int)
-        # res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
-        # print('Running models')
-        # for name, model in tqdm(self.models):
-        #     model.fit(X_train, y_train)
-        #     for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-        #         res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
-        #         res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
-        # self.models = self.models
-        # res_df = pd.DataFrame(res, index=model_names)
-        # res_df.index.name = 'model_name'
-        # display(res_df)
-        #
-        #
-        # if best_f1 < res_df[('test', 'f1')].max():
-        #     best_f1 = res_df[('test', 'f1')].max()
-        #     best_features = selected_features
-        #     best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
-        #     for x in self.models:
-        #         if x[0] == best_model_name:
-        #             best_model = x[1]
-        #
-        #     res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
+        if do_feature_selection:
+            print('running feature score')
+            score_df = {'feature': [], 'score': []}
+            X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
+            X_test, y_test = self.features_dict['valid'], self.valid.label.astype(int)
+
+            cols = self.features_dict['train'].columns
+            new_cols = cols
+            different = True
+            iter = 0
+            while different and iter <= 2:
+                cols = new_cols
+                score_df, res_df, new_cols = feature_importance(X_train, y_train, X_test, y_test, cols)
+                different = len(cols) != len(new_cols)
+                iter += 1
+
+            self.score_df = score_df
+            self.res_df = res_df
+            selected_features = new_cols
+
+            X_train, y_train = self.features_dict['train'][selected_features], self.train.label.astype(int)
+            X_test, y_test = self.features_dict['test'][selected_features], self.test.label.astype(int)
+            res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
+            print('Running models')
+            for name, model in tqdm(self.models):
+                model.fit(X_train, y_train)
+                for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
+                    res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
+                    res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
+            self.models = self.models
+            res_df = pd.DataFrame(res, index=model_names)
+            res_df.index.name = 'model_name'
+            display(res_df)
+
+            if best_f1 < res_df[('test', 'f1')].max():
+                best_f1 = res_df[('test', 'f1')].max()
+                best_features = selected_features
+                best_model_name = res_df.iloc[[res_df[('test', 'f1')].argmax()]].index.values[0]
+                for x in self.models:
+                    if x[0] == best_model_name:
+                        best_model = x[1]
+
+                res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
 
         X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
         best_model.fit(X_train, y_train)
-        model_data = {'features': best_features,'model': best_model}
+        model_data = {'features': best_features, 'model': best_model}
         tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
@@ -410,21 +411,22 @@ class Routine():
         self.evaluation(self.valid_merged)
         return res_df
 
-
     def get_match_score(self, features_df):
         tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
         with open(tmp_path, 'rb') as file:
             model_data = pickle.load(file)
+        self.best_model_data = model_data
         X = features_df[model_data['features']].to_numpy()
         model = model_data['model']
-        return model.predict_proba(X)[:,1]
+        return model.predict_proba(X)[:, 1]
 
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
 
     def get_relevance_scores(self, emb_pairs, word_pairs, **kwargs):
         feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
-            model=self.word_pair_model, train_data_loader=self.train_data_loader, **kwargs)
+                                                 model=self.word_pair_model, train_data_loader=self.train_data_loader,
+                                                 **kwargs)
 
         return feat, word_pairs
 
@@ -439,7 +441,8 @@ class Routine():
             emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
             features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
             return routine.get_match_score(features)
-        return partial(predictor,routine=self)
+
+        return partial(predictor, routine=self)
 
     def evaluation(self, df, pred_threshold=0.05):
         self.reset_networks = False
@@ -466,7 +469,7 @@ class Routine():
         pred = predictor(df)
         tmp_df = df[(pred > 0.5)]
         max_len = min(100, tmp_df.shape[0])
-        df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
+        df_to_process = tmp_df.sample(max_len, random_state=0).replace(pd.NA, '').reset_index(drop=True)
         df_to_process['id'] = df_to_process.index
         self.ev_df['match'] = df_to_process
         data_dict = self.get_processed_data(df_to_process, chunk_size=500)
@@ -480,12 +483,12 @@ class Routine():
         match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match.csv'))
         display(match_stat)
         res_df_match = res_df
-        match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(['size', 'mean','median','min','max'])
+        match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(['size', 'mean', 'median', 'min', 'max'])
         match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match_mean_delta.csv'))
 
-        tmp_df = df[(pred> pred_threshold) & (pred < 0.5)]
+        tmp_df = df[(pred > pred_threshold) & (pred < 0.5)]
         max_len = min(100, tmp_df.shape[0])
-        df_to_process = tmp_df.sample(max_len,random_state=0).replace(pd.NA, '').reset_index(drop=True)
+        df_to_process = tmp_df.sample(max_len, random_state=0).replace(pd.NA, '').reset_index(drop=True)
         df_to_process['id'] = df_to_process.index
         self.ev_df['nomatch'] = df_to_process
         data_dict = self.get_processed_data(df_to_process, chunk_size=500)
