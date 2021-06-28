@@ -30,7 +30,7 @@ class FeatureExtractorGeneral:
         return res
 
     @staticmethod
-    def compute_derived_features(df:pd.DataFrame, feature_names, possible_unpaired=['_exclusive', '', '_both']):
+    def compute_derived_features(df:pd.DataFrame, feature_names, possible_unpaired=['_exclusive', '', '_both'], null_value=0):
         # possible_upaired = ['_max', '_min', ''] # to differentiate between lef and right unpaired elements
         for feature_name in feature_names:
             for x in possible_unpaired:
@@ -41,7 +41,7 @@ class FeatureExtractorGeneral:
                     feature_name + '_unpaired' + x])
             # df[feature_name + '_diff' + '_2min'] = df[feature_name + '_paired'] - (df[feature_name + '_unpaired_min'] * 2)
             # df[feature_name + '_perc' + '_2min'] = df[feature_name + '_paired'] / ( df[feature_name + '_paired'] + df[feature_name + '_unpaired_min'] * 2)
-        return df.fillna(0)
+        return df.fillna(null_value)
 
 
 class FeatureExtractor(FeatureExtractorGeneral):
@@ -69,6 +69,16 @@ class FeatureExtractor(FeatureExtractorGeneral):
         tmp_stat = FeatureExtractor.extract_features(word_pairs_df, complementary, pos_threshold, null_value)
         tmp_stat.columns = tmp_stat.columns + f'_allattr'
         stat_list.append(tmp_stat)
+
+        # side_features = pd.concat(stat_list, 1).fillna(null_value)
+        # features = [x.replace('left_', '') for x in side_features.columns if x.startswith('left_')]
+        # tmp_stat = pd.DataFrame(index=side_features.index)
+        # for x in features:
+        #     tmp_stat[x] = (side_features['left_' + x] + side_features['right_' + x]) / 2
+        # all_stat = FeatureExtractor.extract_features(word_pairs_df, complementary, pos_threshold, null_value)
+        # all_stat.columns = all_stat.columns + f'_allattr'
+        # return pd.concat([tmp_stat, all_stat], 1).fillna(null_value)
+
         return pd.concat(stat_list, 1).fillna(null_value)
 
     @staticmethod
@@ -100,7 +110,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
 
         stat = (tmp.groupby(['id'])['comp_pred']).agg(functions)
         unpaired_stat_full = stat
-        unpaired_stat_full = unpaired_stat_full.fillna(0)
+        unpaired_stat_full = unpaired_stat_full.fillna(null_value)
         unpaired_stat_full.columns += '_unpaired'
 
         # tmp = word_pairs_df[(word_pairs_df.left_word == '[UNP]') | (word_pairs_df.right_word == '[UNP]')].copy()
@@ -163,7 +173,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
 
         stat = (tmp.groupby(['id'])['comp_pred']).agg(functions)
         unpaired_stat_full = stat
-        unpaired_stat_full = unpaired_stat_full.fillna(0)
+        unpaired_stat_full = unpaired_stat_full.fillna(null_value)
         unpaired_stat_full.columns += '_unpaired'
 
 
