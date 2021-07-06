@@ -23,7 +23,7 @@ class WordPairGenerator(EMFeatures):
                        'right_attribute': []}
     unpair_threshold = 0.6
     cross_attr_threshold = .65
-    duplicate_threshold = .8
+    duplicate_threshold = .75
     zero_emb = torch.zeros(1, 768)
 
     def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=None,
