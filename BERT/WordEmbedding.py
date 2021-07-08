@@ -7,8 +7,8 @@ from transformers import BertModel, BertTokenizer
 
 
 class WordEmbedding():
-    def __init__(self, device='auto', verbose=False):
-        self.model = BertModel.from_pretrained('bert-base-uncased', output_hidden_states=True)
+    def __init__(self, device='auto', verbose=False, model_path='bert-base-uncased'):
+        self.model = BertModel.from_pretrained(model_path, output_hidden_states=True)
         # Set the device to GPU (cuda) if available, otherwise stick with CPU
         if device == 'auto':
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'

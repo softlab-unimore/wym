@@ -42,7 +42,7 @@ class Routine():
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
                  col_to_drop=[],
-                 softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True):
+                 softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True, we_finetuned=False):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -58,7 +58,6 @@ class Routine():
         self.model_name = model_name
         self.feature_extractor = FeatureExtractor()
         self.verbose = verbose
-        self.we = WordEmbedding(device=self.device, verbose=verbose)
         if dataset_path == None:
             self.dataset_path = os.path.join(softlab_path, 'Dataset', 'Entity Matching', dataset_name)
         self.project_path = os.path.join(softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
@@ -71,6 +70,9 @@ class Routine():
             os.makedirs(os.path.join(self.model_files_path, 'results'))
         except:
             pass
+
+        finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
+        self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path) if we_finetuned else WordEmbedding(device=self.device, verbose=verbose)
 
         sys.path.append(os.path.join(project_path, 'common_functions'))
         sys.path.append(os.path.join(project_path, 'src'))
@@ -444,7 +446,7 @@ class Routine():
 
         return partial(predictor, routine=self)
 
-    def evaluation(self, df, pred_threshold=0.05):
+    def evaluation(self, df, pred_threshold=0.00):
         self.reset_networks = False
         self.net_train()
         tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')

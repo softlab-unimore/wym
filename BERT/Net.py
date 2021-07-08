@@ -1,25 +1,24 @@
-import gc
-import os
 import copy
-import torch
+import os
 import time
+
+import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
-from sklearn.preprocessing import Normalizer,StandardScaler, MinMaxScaler
-import numpy as np
-
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import Dataset, DataLoader
 
 
 class TanhScaler(StandardScaler):
-  def __init__(self, scale_factor=1.):
-    super().__init__()
-    self.scale_factor=scale_factor
+    def __init__(self, scale_factor=1.):
+        super().__init__()
+        self.scale_factor = scale_factor
 
-  def transform(self, X, copy=None):
-    tmp = super().transform(X)
-    return 0.5 * (np.tanh( self.scale_factor * tmp) + 1)
+    def transform(self, X, copy=None):
+        tmp = super().transform(X)
+        return 0.5 * (np.tanh(self.scale_factor * tmp) + 1)
 
 
 class DatasetAccoppiate(Dataset):
@@ -36,26 +35,35 @@ class DatasetAccoppiate(Dataset):
             self.tanh_scaler_diff = TanhScaler().fit(abs_diff_vec.cpu())
 
         # mean_vec_new, abs_diff_vec_new = self.tanh_scaler_mean.transform(mean_vectors), self.tanh_scaler_diff.transform(abs_diff)
+        # mean_vec_new, abs_diff_vec_new = torch.nn.functional.normalize(mean_vec, dim=1), torch.nn.functional.normalize(abs_diff_vec, dim=1)
         mean_vec_new, abs_diff_vec_new = mean_vec, abs_diff_vec
         X = torch.cat([mean_vec_new, abs_diff_vec_new], 1)
         # X = abs_diff_vec
         return X
 
-    def preprocess_label(self, word_pairs, embedding_pairs):
+    def preprocess_label(self, word_pairs, embedding_pairs, min_sim_pair=.7, max_sim_unpair=.5):
         tmp_word_pairs = word_pairs.copy()
-        tmp_word_pairs['cos_sim'] = torch.cosine_similarity(embedding_pairs[:, 0, :].cpu(), embedding_pairs[:, 1, :].cpu())
+        tmp_word_pairs['cos_sim'] = torch.cosine_similarity(embedding_pairs[:, 0, :].cpu(),
+                                                            embedding_pairs[:, 1, :].cpu())
         tmp_word_pairs['label_corrected'] = tmp_word_pairs['label']
-        tmp_word_pairs.loc[(tmp_word_pairs.cos_sim >= .7) & (tmp_word_pairs.label == 0), 'label_corrected'] = .5
-        tmp_word_pairs.loc[(tmp_word_pairs.cos_sim < .5) & (tmp_word_pairs.label == 1), 'label_corrected'] = .5
+        tmp_word_pairs.loc[
+            (tmp_word_pairs.cos_sim >= min_sim_pair) & (tmp_word_pairs.label == 0), 'label_corrected'] = .5
+        tmp_word_pairs.loc[
+            (tmp_word_pairs.cos_sim < max_sim_unpair) & (tmp_word_pairs.label == 1), 'label_corrected'] = .5
         df = tmp_word_pairs
         grouped = df.groupby(['left_word', 'right_word'], as_index=False).agg(
             {'label': ['mean'], 'cos_sim': ['mean'], 'label_corrected': ['mean']}).droplevel(1, 1)
+        df = df.drop('label_corrected_mean', 1) if 'label_corrected_mean' in df.columns else df
+        word_pairs_corrected = df.merge(grouped[['left_word', 'right_word'] + ['label_corrected']],
+                                        on=['left_word', 'right_word'], suffixes=('', '_mean'), how='left')
 
-        word_pairs_corrected = tmp_word_pairs.merge(grouped[['left_word', 'right_word'] + ['label_corrected']],
-                                                    on=['left_word', 'right_word'], suffixes=('', '_mean'), how='left')
         self.word_pairs_corrected = word_pairs_corrected
         self.aggregated = grouped
-        return torch.tensor(word_pairs_corrected['label_corrected_mean'].values, dtype=torch.float).reshape([-1, 1])
+        tmp_res = word_pairs_corrected['label_corrected_mean']
+
+        # tmp_res = (word_pairs_corrected['label_corrected_mean'] * 4 + word_pairs_corrected['label_corrected']) / 5
+
+        return torch.tensor(tmp_res.values, dtype=torch.float).reshape([-1, 1])
 
     def __len__(self):
         return len(self.X)
@@ -82,13 +90,14 @@ class NetAccoppiate(nn.Module):
         x = F.sigmoid(self.fc4(x))
         return x
 
+
 def train_save_net(model_files_path, reset_networks, data_loader, words_pairs_dict, emb_pairs_dict, device='cuda'):
     model = NetAccoppiate()
     tmp_path = os.path.join(model_files_path, 'net0.pickle')
     try:
         assert reset_networks == False, 'resetting networks'
         model.load_state_dict(torch.load(tmp_path,
-                                              map_location=torch.device(device)))
+                                         map_location=torch.device(device)))
     except Exception as e:
         print(e)
 
@@ -107,8 +116,8 @@ def train_save_net(model_files_path, reset_networks, data_loader, words_pairs_di
                             'valid': DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4)}
 
         model, score_history, last_model = train_model(net,
-                                                            dataloaders_dict, criterion, optimizer,
-                                                            nn.MSELoss().to(device), num_epochs=150, device=device)
+                                                       dataloaders_dict, criterion, optimizer,
+                                                       nn.MSELoss().to(device), num_epochs=150, device=device)
         # optimizer = optim.SGD(net.parameters(), lr=0.0001, momentum=.9)
         # model, score_history, last_model = train_model(net,dataloaders_dict, criterion, optimizer,nn.MSELoss().to(device), num_epochs=150, device=device)
 
@@ -120,8 +129,8 @@ def train_save_net(model_files_path, reset_networks, data_loader, words_pairs_di
         torch.save(model.state_dict(), tmp_path)
 
 
-
-def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_epochs=25, high_is_better=False, device='guess',):
+def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_epochs=25, high_is_better=False,
+                device='guess', ):
     if device == 'guess':
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -135,7 +144,9 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     best_epoch = 0
 
     for epoch in range(num_epochs):
-        out = f'Epoch {epoch+1:3d}/{num_epochs}: '
+        out = f'Epoch {epoch + 1:3d}/{num_epochs}: '
+        # gc.collect()
+        # torch.cuda.empty_cache()
         # Each epoch has a training and validation phase
         for phase in ['train', 'valid']:
             if phase == 'train':
@@ -147,10 +158,11 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
             running_corrects = 0
 
             # Iterate over data.
+            i = 0
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
-
+                i += 1
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
@@ -161,8 +173,13 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
                     # Special case for inception because in training it has an auxiliary output. In train
                     #   mode we calculate the loss by summing the final output and the auxiliary output
                     #   but in testing we only consider the final output.
+
                     outputs = model(inputs)
-                    loss = criterion(outputs, labels)
+                    try:
+                        loss = criterion(outputs, labels)
+                    except:
+                        import pdb
+                        pdb.set_trace()
 
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -185,7 +202,7 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
                 best_model_wts = copy.deepcopy(model.state_dict())
             if epoch > 1:
                 if phase == 'valid':
-                    if ( best_acc > epoch_acc ) == high_is_better:
+                    if (best_acc > epoch_acc) == high_is_better:
                         if overfitting_counter == 10:
                             break
                         overfitting_counter += 1
@@ -204,5 +221,3 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     last_model = copy.deepcopy(model)
     model.load_state_dict(best_model_wts)
     return model, acc_history, last_model
-
-
