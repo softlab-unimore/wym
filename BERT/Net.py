@@ -221,3 +221,4 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     last_model = copy.deepcopy(model)
     model.load_state_dict(best_model_wts)
     return model, acc_history, last_model
+

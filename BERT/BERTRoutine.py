@@ -32,6 +32,7 @@ from tqdm.notebook import tqdm
 
 from Evaluation import evaluate_df
 from FeatureExtractor import FeatureExtractor
+from Finetune import finetune_BERT
 from Modelling import feature_importance
 from Net import DatasetAccoppiate, NetAccoppiate, train_model
 from WordEmbedding import WordEmbedding
@@ -42,7 +43,8 @@ class Routine():
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
                  col_to_drop=[],
-                 softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True, we_finetuned=False):
+                 softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True, we_finetuned=False,
+                 we_finetune_path=None, num_epochs=10):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -70,9 +72,6 @@ class Routine():
             os.makedirs(os.path.join(self.model_files_path, 'results'))
         except:
             pass
-
-        finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
-        self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path) if we_finetuned else WordEmbedding(device=self.device, verbose=verbose)
 
         sys.path.append(os.path.join(project_path, 'common_functions'))
         sys.path.append(os.path.join(project_path, 'src'))
@@ -155,6 +154,17 @@ class Routine():
         self.train = self.train_merged
         self.valid = self.valid_merged
         self.test = self.test_merged
+
+        if we_finetuned:
+            if we_finetune_path is not None:
+                finetuned_path = we_finetune_path
+            elif we_finetuned == 'SBERT':
+                finetuned_path = finetune_BERT(self, num_epochs=num_epochs)
+            else:
+                finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
+            self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path)
+        else:
+            WordEmbedding(device=self.device, verbose=verbose)
 
     def generate_df_embedding(self, chunk_size=500):
         self.embeddings = {}
@@ -241,7 +251,7 @@ class Routine():
         word_pairs = pd.DataFrame(word_pairs)
         return emb_pairs, word_pairs
 
-    def net_train(self, num_epochs=50, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None, valid_pairs=None,
+    def net_train(self, num_epochs=40, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None, valid_pairs=None,
                   valid_emb=None):
         if word_pairs is None or emb_pairs is None:
             word_pairs = self.words_pairs_dict['train']
