@@ -26,13 +26,15 @@ class WordPairGenerator(EMFeatures):
     duplicate_threshold = .75
     zero_emb = torch.zeros(1, 768)
 
-    def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, unpair_threshold=None,
+    def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, sentence_embedding=True,
+                 unpair_threshold=None,
                  cross_attr_threshold=None,
                  duplicate_threshold=None, verbose=False, **kwargs):
         super().__init__(**kwargs)
         self.words = words
         self.embeddings = embeddings
         self.use_schema = use_schema
+        self.sentence_embeddings = sentence_embedding
         self.unpair_threshold = unpair_threshold if unpair_threshold is not None else WordPairGenerator.unpair_threshold
         self.cross_attr_threshold = cross_attr_threshold if cross_attr_threshold is not None else WordPairGenerator.cross_attr_threshold
         self.duplicate_threshold = duplicate_threshold if duplicate_threshold is not None else WordPairGenerator.duplicate_threshold
@@ -43,6 +45,11 @@ class WordPairGenerator(EMFeatures):
     def get_word_pairs(self, df, data_dict):
         word_dict_list = []
         embedding_list = []
+        if self.sentence_embeddings:
+            sentence_embedding_list = []
+            sent_emb_l, sent_emb_r = data_dict['left_sentence_emb'], data_dict['right_sentence_emb']
+        else:
+            sent_emb_l, sent_emb_r = [None] * df.shape[0], [None] * df.shape[0]
         if 'id' not in df.columns:
             df['id'] = df.index
         if self.verbose:
@@ -50,15 +57,24 @@ class WordPairGenerator(EMFeatures):
             to_cycle = tqdm(range(df.shape[0]))
         else:
             to_cycle = range(df.shape[0])
-        for i, words1, emb1, left_words_map, words2, emb2, right_words_map in zip(
+
+        for i, words1, emb1, left_words_map, sent1, words2, emb2, right_words_map, sent2 in zip(
                 to_cycle,
-                data_dict['left_words'], data_dict['left_emb'], data_dict['left_word_map'],
-                data_dict['right_words'], data_dict['right_emb'], data_dict['right_word_map']):
+                data_dict['left_words'], data_dict['left_emb'], data_dict['left_word_map'], sent_emb_l,
+                data_dict['right_words'], data_dict['right_emb'], data_dict['right_word_map'], sent_emb_r):
             if i % 2000 == 0:
                 gc.collect()
                 torch.cuda.empty_cache()
             el = df.iloc[[i]]
-            tmp_word, tmp_emb = self.pairing_core_logic(el, emb1, emb2, words1, words2, left_words_map, right_words_map)
+
+            tmp_res = self.pairing_core_logic(el, emb1, emb2, words1, words2, left_words_map, right_words_map, sent1,
+                                              sent2)
+            if self.sentence_embeddings:
+                tmp_word, tmp_emb, tmp_sent_emb = tmp_res
+                sentence_embedding_list.append(tmp_sent_emb)
+            else:
+                tmp_word, tmp_emb = tmp_res
+
             n_pairs = len(tmp_word['left_word'])
             if 'label' in el.columns:
                 tmp_word['label'] = [el.label.values[0]] * n_pairs
@@ -71,39 +87,28 @@ class WordPairGenerator(EMFeatures):
         keys = word_dict_list[0].keys()
         ret_dict = {key: np.concatenate([x[key] for x in word_dict_list]) for key in keys}
 
-        """def tmp_func(obj, self):
-                    i, words1, emb1, left_words_map, words2, emb2, right_words_map = obj
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    el = df.iloc[[i]]
-                    tmp_word, tmp_emb = self.pairing_core_logic(el,  emb1, emb2, words1, words2, left_words_map, right_words_map)
-                    n_pairs = len(tmp_word['left_word'])
-                    tmp_word['label'] = [el.label.values[0]] * n_pairs
-                    tmp_word['id'] = [el.id.values[0]] * n_pairs
-                    print(i)
-                    return [tmp_word,tmp_emb]
-
-
-                pool = Pool(n_proc)
-                res = pool.map(tmp_func, zip(to_precess, [deepcopy(self)]*len(list(to_precess)))  ### Function and iterable here
-                pool.close()
-                pool.join()
-
-                for tmp_word, tmp_emb in res:
-                    word_dict_list.append(tmp_word)
-                    embedding_list.append(tmp_emb)"""
-        return ret_dict, torch.cat(embedding_list)
+        if self.sentence_embeddings is not None:
+            return ret_dict, torch.cat(embedding_list), torch.cat(sentence_embedding_list)
+        else:
+            return ret_dict, torch.cat(embedding_list)
 
     def process_df(self, df):
         word_dict_list = []
         embedding_list = []
+        if self.sentence_embeddings is not None:
+            sentence_embedding_list = []
         to_cycle = tqdm(range(df.shape[0])) if self.verbose == True else range(df.shape[0])
         for i in to_cycle:
             if i % 2000 == 0:
                 gc.collect()
                 torch.cuda.empty_cache()
             el = df.iloc[[i]]
-            tmp_word, tmp_emb = self.pairing_core_logic(el)
+            tmp_res = self.pairing_core_logic(el)
+            if self.sentence_embeddings is not None:
+                tmp_word, tmp_emb, tmp_sent_emb = tmp_res
+                sentence_embedding_list.append(tmp_sent_emb)
+            else:
+                tmp_word, tmp_emb = tmp_res
             n_pairs = len(tmp_word['left_word'])
             tmp_word['label'] = [el.label.values[0]] * n_pairs
             tmp_word['id'] = [el.id.values[0]] * n_pairs
@@ -112,7 +117,12 @@ class WordPairGenerator(EMFeatures):
 
         keys = word_dict_list[0].keys()
         ret_dict = {key: np.concatenate([x[key] for x in word_dict_list]) for key in keys}
-        return ret_dict, torch.cat(embedding_list)
+        if self.sentence_embeddings is not None:
+            assert torch.cat(sentence_embedding_list).shape[0] == torch.cat(embedding_list).shape[
+                0]  # TODO remove assert
+            return ret_dict, torch.cat(embedding_list), torch.cat(sentence_embedding_list)
+        else:
+            return ret_dict, torch.cat(embedding_list)
 
     @staticmethod
     def cos_sim_set(emb1, emb2):
@@ -263,10 +273,13 @@ class WordPairGenerator(EMFeatures):
             return word_pair, ret_emb
 
     def pairing_core_logic(self, el, emb1=None, emb2=None, words1=None, words2=None, left_words_map=None,
-                           right_words_map=None):
+                           right_words_map=None, sent_emb_1=None, sent_emb_2=None):
         if emb1 is None or emb2 is None or words1 is None or words2 is None:
             emb1 = self.embeddings['table_A'][el.left_id.values[0]]
             emb2 = self.embeddings['table_B'][el.right_id.values[0]]
+            if self.sentence_embeddings is not None:
+                sent_emb_1 = self.sentence_embeddings['table_A'][el.left_id.values[0]]
+                sent_emb_2 = self.sentence_embeddings['table_B'][el.right_id.values[0]]
             words1 = self.words['table_A'][el.left_id.values[0]]
             words2 = self.words['table_B'][el.right_id.values[0]]
             left_words_map = self.words_divided['table_A'][el.left_id.values[0]]
@@ -289,8 +302,9 @@ class WordPairGenerator(EMFeatures):
                 turn_start = deepcopy(start_pos)
                 for side in ['left', 'right']:
                     start = start_pos[side]
-                    words_list, word_map, emb = (words1, left_words_map, emb1) if side == 'left' else (
-                        words2, right_words_map, emb2)
+                    words_list, word_map, emb, sent_emb = (
+                        words1, left_words_map, emb1, sent_emb_1) if side == 'left' else (
+                        words2, right_words_map, emb2, sent_emb_2)
                     indexes = [words_list[start:].index(x) for x in word_map[col]]
                     if len(indexes) > 0:
                         indexes = np.array(indexes) + start
@@ -337,7 +351,8 @@ class WordPairGenerator(EMFeatures):
             unpaired_emb['right'] = r_emb_unp
             if len(l_emb_unp) > 0 and len(r_emb_unp) > 0:
                 tmp_word_pairs, tmp_emb_pairs, pairs = self.generate_pairs(words_l, words_r, l_emb_unp, r_emb_unp,
-                                                                           return_pairs=True, unpair_threshold=self.cross_attr_threshold)
+                                                                           return_pairs=True,
+                                                                           unpair_threshold=self.cross_attr_threshold)
                 new_unpaired_words = deepcopy(WordPairGenerator.word_pair_empty)
                 new_unpaired_words.update(left_pos=[], right_pos=[])
                 if len(tmp_emb_pairs) > 0:
@@ -395,16 +410,24 @@ class WordPairGenerator(EMFeatures):
                 word_pair[unp_side + '_attribute'] = np.concatenate([word_pair[unp_side + '_attribute'], unp_attr])
                 emb_pair = torch.cat([emb_pair.cpu(), tmp_emb[side_mask].cpu()])
 
-                for key in word_pair.keys(): # TODO remove in production
+                for key in word_pair.keys():  # TODO remove in production
                     assert len(word_pair[key]) == len(
                         word_pair['left_word']), f'{key} --> {len(word_pair[key])} != {len(word_pair["left_word"])}'
-            return word_pair, emb_pair
+
         else:
             word_pair, emb_pair, pairs = self.generate_pairs(words1, words2, emb1, emb2, return_pairs=True)
             for side, word_dict in zip(['left', 'right'], [left_words_map, right_words_map]):
                 pos_to_attr_map = WordPairGenerator.get_attr_map(word_dict)
                 all_attr = [pos_to_attr_map[pos] for pos in pairs[:, 1 if side == 'right' else 0]]
                 word_pair[side + '_attribute'] = np.array(all_attr)
+
+        if self.sentence_embeddings is not None:
+            tmp_array = torch.reshape(torch.stack([sent_emb_1, sent_emb_2]), (1, 2, -1))
+            sent_emb_pair = torch.tile(tmp_array, (emb_pair.shape[0], 1, 1))
+            # print(sent_emb_pair.shape) # TODO remove it
+            # print(emb_pair.shape)  # TODO remove it
+            return word_pair, emb_pair, sent_emb_pair
+        else:
             return word_pair, emb_pair
 
     @staticmethod

@@ -22,12 +22,14 @@ class TanhScaler(StandardScaler):
 
 
 class DatasetAccoppiate(Dataset):
-    def __init__(self, word_pairs, embedding_pairs):
-        X = self.preprocess(embedding_pairs)
+    def __init__(self, word_pairs, embedding_pairs, sentence_embedding_pairs=None):
+        X = self.preprocess(embedding_pairs, sentence_embedding_pairs=sentence_embedding_pairs)
+        
         self.X = X
+
         self.y = self.preprocess_label(word_pairs, embedding_pairs)
 
-    def preprocess(self, embedding_pairs):
+    def preprocess(self, embedding_pairs, sentence_embedding_pairs=None):
         mean_vec = embedding_pairs.mean(1)
         abs_diff_vec = torch.abs(embedding_pairs[:, 0, :] - embedding_pairs[:, 1, :])
         if hasattr(self, 'tanh_scaler_mean') == False:
@@ -37,7 +39,11 @@ class DatasetAccoppiate(Dataset):
         # mean_vec_new, abs_diff_vec_new = self.tanh_scaler_mean.transform(mean_vectors), self.tanh_scaler_diff.transform(abs_diff)
         # mean_vec_new, abs_diff_vec_new = torch.nn.functional.normalize(mean_vec, dim=1), torch.nn.functional.normalize(abs_diff_vec, dim=1)
         mean_vec_new, abs_diff_vec_new = mean_vec, abs_diff_vec
-        X = torch.cat([mean_vec_new, abs_diff_vec_new], 1)
+        if sentence_embedding_pairs is not None:
+            mean_sentence_vec = sentence_embedding_pairs.mean(1).cpu()
+            X = torch.cat([mean_vec_new, abs_diff_vec_new, mean_sentence_vec], 1)
+        else:
+            X = torch.cat([mean_vec_new, abs_diff_vec_new], 1)
         # X = abs_diff_vec
         return X
 
@@ -73,10 +79,13 @@ class DatasetAccoppiate(Dataset):
 
 
 class NetAccoppiate(nn.Module):
-    def __init__(self):
+    def __init__(self, sentence_embedding=True):
         super().__init__()
         # self.fc1 = nn.Linear(300*2+len(common_words_df.attribute.unique()), 300)
-        self.fc1 = nn.Linear(768 * 2, 300)
+        if sentence_embedding:
+            self.fc1 = nn.Linear(768 * 3, 300)
+        else:
+            self.fc1 = nn.Linear(768 * 2, 300)
         self.fc2 = nn.Linear(300, 64)
         self.dp2 = nn.Dropout(p=0.5)
         self.fc3 = nn.Linear(64, 32)
@@ -142,7 +151,7 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     best_acc = 1
     overfitting_counter = 0
     best_epoch = 0
-
+    
     for epoch in range(num_epochs):
         out = f'Epoch {epoch + 1:3d}/{num_epochs}: '
         # gc.collect()
@@ -159,7 +168,7 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
 
             # Iterate over data.
             i = 0
-            for inputs, labels in dataloaders[phase]:
+            for inputs, labels in dataloaders[phase]:                
                 inputs = inputs.to(device)
                 labels = labels.to(device)
                 i += 1

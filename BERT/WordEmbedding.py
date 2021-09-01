@@ -74,7 +74,7 @@ class WordEmbedding():
                 words_list.append(token)
 
         if sentence is not None and sentence != 'None':
-            words_splitted = sentence.lower().split() + ['[SEP]'] # unidecode.unidecode ERROR IN accent words
+            words_splitted = sentence.lower().split() + ['[SEP]']  # unidecode.unidecode ERROR IN accent words
             new_words_map = {x: [] for x in range(len(words_splitted))}
             word_pos = 0
             tmp_word = ''
@@ -105,7 +105,7 @@ class WordEmbedding():
     def get_words_by_attribute(x):
         not_na_mask = x.notna()
         if not_na_mask.any():
-            words = np.concatenate([str(val).split() for val in x[not_na_mask].values] )  # set of unique words here
+            words = np.concatenate([str(val).split() for val in x[not_na_mask].values])  # set of unique words here
             return ' '.join(words)
         else:
             return None
@@ -116,16 +116,21 @@ class WordEmbedding():
         sentences = df[columns].apply(WordEmbedding.get_words_to_embed, 1)
         not_None_sentences = [x for x in sentences if x is not None]
         if len(not_None_sentences) > 0:
-            tmp_emb_all, tmp_words = self.get_word_embeddings(not_None_sentences)
-        emb_all, words = [], []
+            if self.sentence_embedding:
+                tmp_emb_all, tmp_words, tmp_sentences = self.get_word_embeddings(not_None_sentences)
+            else:
+                tmp_emb_all, tmp_words = self.get_word_embeddings(not_None_sentences)
+        emb_all, words, sentences_emb = [], [], []
         index = 0
         for i in sentences:
             if i is None:
                 emb_all.append(torch.tensor([0]).to(self.device))
+                sentences_emb.append(torch.tensor([0]).to(self.device))
                 words.append(['[SEP]'])
             else:
                 emb_all.append(tmp_emb_all[index])
                 words.append(tmp_words[index])
+                sentences_emb.append(tmp_sentences[index])
                 index += 1
 
         words_cutted = []
@@ -135,10 +140,15 @@ class WordEmbedding():
             words_cutted.append(word_list[:last_index])
             emb_cutted.append(emb_all[i][:last_index].cpu())
         emb_all = np.array(emb_cutted, dtype=object)
-        return emb_all, words_cutted
+
+        if self.sentence_embedding:
+            sentences_emb = np.array(sentences_emb, dtype=object)
+            return emb_all, words_cutted, sentences_emb
+        else:
+            return emb_all, words_cutted
 
     def generate_embedding(self, df, chunk_size=500):
-        emb_list, words_list = [], []
+        emb_list, words_list, sent_emb_list = [], [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
         if self.verbose:
             print('Computing embedding')
@@ -148,9 +158,17 @@ class WordEmbedding():
         for chunk in to_cycle:
             gc.collect()
             torch.cuda.empty_cache()
-            emb, words = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
+            if self.sentence_embedding:
+                emb, words, sent_emb = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
+                sent_emb_list.append(sent_emb)
+            else:
+                emb, words = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
             emb_list.append(emb)
             words_list += words
-        if len(emb_list)> 0:
+        if len(emb_list) > 0:
             emb_list = np.concatenate(emb_list)
-        return emb_list, words_list
+            sent_emb_list = np.concatenate(sent_emb_list)
+        if self.sentence_embedding:
+            return emb_list, words_list, sent_emb_list
+        else:
+            return emb_list, words_list

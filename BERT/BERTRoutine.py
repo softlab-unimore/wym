@@ -44,7 +44,8 @@ class Routine():
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
                  col_to_drop=[],
                  softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True, we_finetuned=False,
-                 we_finetune_path=None, num_epochs=10):
+                 we_finetune_path=None, num_epochs=10,
+                 sentence_embedding=True):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -154,7 +155,7 @@ class Routine():
         self.train = self.train_merged
         self.valid = self.valid_merged
         self.test = self.test_merged
-
+        self.sentence_embedding = sentence_embedding
         if we_finetuned:
             if we_finetune_path is not None:
                 finetuned_path = we_finetune_path
@@ -162,12 +163,14 @@ class Routine():
                 finetuned_path = finetune_BERT(self, num_epochs=num_epochs)
             else:
                 finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
-            self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path)
+            self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path,
+                                    sentence_embedding=sentence_embedding)
         else:
-            WordEmbedding(device=self.device, verbose=verbose)
+            self.we = WordEmbedding(device=self.device, verbose=verbose, sentence_embedding=sentence_embedding)
 
     def generate_df_embedding(self, chunk_size=500):
         self.embeddings = {}
+        self.sentence_embedding_dict = {}
         self.words = {}
         try:
             assert self.reset_files == False, 'Reset_files'
@@ -178,6 +181,10 @@ class Routine():
                 tmp_path = os.path.join(self.model_files_path, 'words_list_' + df_name + '.csv')
                 with open(tmp_path, 'rb') as file:
                     self.words[df_name] = pickle.load(file)
+                if self.sentence_embedding:
+                    tmp_path = os.path.join(self.model_files_path, 'sentence_emb_' + df_name + '.csv')
+                    with open(tmp_path, 'rb') as file:
+                        self.sentence_embedding_dict[df_name] = torch.load(file, map_location=torch.device(self.device))
             print('Loaded ')
         except Exception as e:
             print(e)
@@ -186,7 +193,14 @@ class Routine():
             for name, df in [('table_A', self.table_A), ('table_B', self.table_B)]:
                 gc.collect()
                 torch.cuda.empty_cache()
-                emb, words = we.generate_embedding(df, chunk_size=chunk_size)
+                if self.sentence_embedding:
+                    emb, words, sentence_emb = we.generate_embedding(df, chunk_size=chunk_size)
+                    self.sentence_embedding_dict[name] = sentence_emb
+                    tmp_path = os.path.join(self.model_files_path, 'sentence_emb_' + name + '.csv')
+                    with open(tmp_path, 'wb') as file:
+                        torch.save(sentence_emb, file)
+                else:
+                    emb, words = we.generate_embedding(df, chunk_size=chunk_size)
                 self.embeddings[name] = emb
                 self.words[name] = words
                 tmp_path = os.path.join(self.model_files_path, 'emb_' + name + '.csv')
@@ -195,6 +209,8 @@ class Routine():
                 tmp_path = os.path.join(self.model_files_path, 'words_list_' + name + '.csv')
                 with open(tmp_path, 'wb') as file:
                     pickle.dump(words, file)
+        assert self.sentence_embedding_dict['table_A'][0].shape == torch.Size(
+            [768]), f'Sentence emb has shape: {routine.sentence_embedding_dict["table_A"][0].shape}. It must be [768]!'
 
     def get_processed_data(self, df, chunk_size=500, verbose=False):
         we = self.we
@@ -207,13 +223,19 @@ class Routine():
             tmp_df = df.loc[:, cols]
             res[side + '_word_map'] = WordPairGenerator.map_word_to_attr(tmp_df, self.cols, prefix=prefix,
                                                                          verbose=self.verbose)
-            emb, words = we.generate_embedding(tmp_df, chunk_size=chunk_size)
+            if self.sentence_embedding:
+                emb, words, sentence_emb = we.generate_embedding(tmp_df, chunk_size=chunk_size)
+                res[side + '_sentence_emb'] = sentence_emb
+            else:
+                emb, words = we.generate_embedding(tmp_df, chunk_size=chunk_size)
             res[side + '_emb'] = emb
             res[side + '_words'] = words
         return res
 
     def compute_word_pair(self, use_schema=True, **kwargs):
         words_pairs_dict, emb_pairs_dict = {}, {}
+        if self.sentence_embedding:
+            self.sentence_emb_pairs_dict = {}
         try:
             assert self.reset_files == False, 'Reset_files'
             for df_name in ['train', 'valid', 'test']:
@@ -223,15 +245,24 @@ class Routine():
                 tmp_path = os.path.join(self.model_files_path, df_name + 'emb_pairs.csv')
                 with open(tmp_path, 'rb') as file:
                     emb_pairs_dict[df_name] = pickle.load(file)
+
+                tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
+                with open(tmp_path, 'rb') as file:
+                    self.sentence_emb_pairs_dict[df_name] = pickle.load(file)
             print('Loaded ')
         except Exception as e:
             print(e)
 
             word_pair_generator = WordPairGenerator(self.words, self.embeddings, self.words_divided, df=self.test,
                                                     use_schema=use_schema, device=self.device, verbose=self.verbose,
+                                                    sentence_embedding=self.sentence_embedding_dict,
                                                     **kwargs)
             for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
-                word_pairs, emb_pairs = word_pair_generator.process_df(df)
+                if self.sentence_embedding:
+                    word_pairs, emb_pairs, sentence_emb_pairs = word_pair_generator.process_df(df)
+                    self.sentence_emb_pairs_dict[df_name] = sentence_emb_pairs
+                else:
+                    word_pairs, emb_pairs = word_pair_generator.process_df(df)
                 tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
                 words_pairs_dict[df_name] = pd.DataFrame(word_pairs)
                 words_pairs_dict[df_name].to_csv(tmp_path, index=False)
@@ -240,28 +271,50 @@ class Routine():
                 with open(tmp_path, 'wb') as file:
                     pickle.dump(emb_pairs, file)
                 emb_pairs_dict[df_name] = emb_pairs
+            if self.sentence_embedding:
+                tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
+                with open(tmp_path, 'wb') as file:
+                    pickle.dump(self.sentence_emb_pairs_dict, file)
 
         self.words_pairs_dict = words_pairs_dict
         self.emb_pairs_dict = emb_pairs_dict
-        return words_pairs_dict, emb_pairs_dict
+        if self.sentence_embedding:
+            return self.words_pairs_dict, self.emb_pairs_dict, self.sentence_emb_pairs_dict
+        else:
+            return words_pairs_dict, emb_pairs_dict
 
     def get_word_pairs(self, df, data_dict, use_schema=True, **kwargs):
-        wp = WordPairGenerator(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose, **kwargs)
-        word_pairs, emb_pairs = wp.get_word_pairs(df, data_dict)
+        wp = WordPairGenerator(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose,
+                               sentence_embedding=self.sentence_embedding, **kwargs)
+        res = wp.get_word_pairs(df, data_dict)
+        if self.sentence_embedding:
+            word_pairs, emb_pairs, sent_emb_pairs = res
+        else:
+            word_pairs, emb_pairs = res
+        
         word_pairs = pd.DataFrame(word_pairs)
-        return emb_pairs, word_pairs
+        if self.sentence_embedding:
+            return word_pairs, emb_pairs, sent_emb_pairs
+        else:
+            return word_pairs, emb_pairs
 
-    def net_train(self, num_epochs=40, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None, valid_pairs=None,
-                  valid_emb=None):
+    def net_train(self, num_epochs=40, lr=3e-5, batch_size=256, word_pairs=None, emb_pairs=None,
+                  sentence_emb_pairs=None,
+                  valid_pairs=None, valid_emb=None, valid_sentence_emb_pairs=None):
         if word_pairs is None or emb_pairs is None:
             word_pairs = self.words_pairs_dict['train']
             emb_pairs = self.emb_pairs_dict['train']
+            if self.sentence_embedding:
+                sententce_emb_pairs = self.sentence_emb_pairs_dict['train']
+
         if valid_pairs is None or valid_emb is None:
             valid_pairs = self.words_pairs_dict['valid']
             valid_emb = self.emb_pairs_dict['valid']
-        data_loader = DatasetAccoppiate(word_pairs, emb_pairs)
+            if self.sentence_embedding:
+                valid_sententce_emb_pairs = self.sentence_emb_pairs_dict['valid']
+        data_loader = DatasetAccoppiate(word_pairs, emb_pairs, sentence_embedding_pairs=sententce_emb_pairs)
         self.train_data_loader = data_loader
-        best_model = NetAccoppiate()
+        best_model = NetAccoppiate(sentence_embedding=self.sentence_embedding)
         device = self.device
         tmp_path = os.path.join(self.model_files_path, 'net0.pickle')
         try:
@@ -269,7 +322,7 @@ class Routine():
             best_model.load_state_dict(torch.load(tmp_path, map_location=torch.device(device)))
         except Exception as e:
             print(e)
-            net = NetAccoppiate()
+            net = NetAccoppiate(sentence_embedding=self.sentence_embedding)
             net.to(device)
             criterion = nn.BCELoss().to(device)
             # optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=.9)
@@ -277,7 +330,7 @@ class Routine():
 
             train_dataset = data_loader
             valid_dataset = copy.deepcopy(train_dataset)
-            valid_dataset.__init__(valid_pairs, valid_emb)
+            valid_dataset.__init__(valid_pairs, valid_emb, sentence_embedding_pairs=valid_sententce_emb_pairs)
 
             dataloaders_dict = {'train': DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4),
                                 'valid': DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4)}
@@ -304,17 +357,20 @@ class Routine():
         words_pairs_dict = {}
         for name in ['train', 'valid', 'test']:
             feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
-                                                     self.emb_pairs_dict[name], self.train_data_loader, **kwargs)
+                                                     self.emb_pairs_dict[name], self.train_data_loader,
+                                                     self.sentence_emb_pairs_dict[name], **kwargs)
             features_dict[name] = feat
             words_pairs_dict[name] = word_pairs
         self.features_dict, self.words_pairs_dict = features_dict, words_pairs_dict
         return features_dict, words_pairs_dict
 
-    def extract_features(self, model, word_pairs, emb_pairs, train_data_loader, **kwargs):
+    def extract_features(self, model, word_pairs, emb_pairs, train_data_loader, sentence_emb_pairs=None, **kwargs):
         model.eval()
         model.to(self.device)
+        
         data_loader = train_data_loader
-        data_loader.__init__(word_pairs, emb_pairs)
+        # print(f'emb_pairs: {emb_pairs.shape}\nsent_pair: {sentence_emb_pairs.shape}') # TODO delete
+        data_loader.__init__(word_pairs, emb_pairs, sentence_emb_pairs)
         word_pair_corrected = data_loader.word_pairs_corrected
         word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
         # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
@@ -435,9 +491,11 @@ class Routine():
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
 
-    def get_relevance_scores(self, emb_pairs, word_pairs, **kwargs):
+    def get_relevance_scores(self, word_pairs, emb_pairs, sentence_emb_pairs=None, **kwargs): # m2
+        
         feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
                                                  model=self.word_pair_model, train_data_loader=self.train_data_loader,
+                                                 sentence_emb_pairs=sentence_emb_pairs,
                                                  **kwargs)
 
         return feat, word_pairs
@@ -446,12 +504,12 @@ class Routine():
         self.reset_networks = False
         self.net_train()
 
-        def predictor(df_to_process, routine):
+        def predictor(df_to_process, routine): # m1
             df_to_process = df_to_process.copy().reset_index(drop=True)
             df_to_process['id'] = df_to_process.index
             data_dict = routine.get_processed_data(df_to_process, chunk_size=500)
-            emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
-            features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
+            res = routine.get_word_pairs(df_to_process, data_dict)            
+            features, word_relevance = routine.get_relevance_scores(*res)
             return routine.get_match_score(features)
 
         return partial(predictor, routine=self)
@@ -463,16 +521,7 @@ class Routine():
         with open(tmp_path, 'rb') as file:
             model = pickle.load(file)
 
-        def predictor(df_to_process, routine, model):
-            df_to_process = df_to_process.copy().reset_index(drop=True)
-            df_to_process['id'] = df_to_process.index
-            data_dict = routine.get_processed_data(df_to_process, chunk_size=500)
-            emb_pairs, word_pairs = routine.get_word_pairs(df_to_process, data_dict)
-            features, word_relevance = routine.get_relevance_scores(emb_pairs, word_pairs)
-            X = features.to_numpy()
-            return model.predict_proba(X)[:, 1]
-
-        predictor = partial(predictor, routine=self, model=model)
+        predictor = self.get_predictor()
 
         self.verbose = False
         self.we.verbose = False
@@ -485,8 +534,8 @@ class Routine():
         df_to_process['id'] = df_to_process.index
         self.ev_df['match'] = df_to_process
         data_dict = self.get_processed_data(df_to_process, chunk_size=500)
-        emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
-        features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
+        res = self.get_word_pairs(df_to_process, data_dict)
+        features, word_relevance = self.get_relevance_scores(*res)
         self.df_to_process = df_to_process
         res_df = evaluate_df(word_relevance, df_to_process, predictor)
 
@@ -504,8 +553,8 @@ class Routine():
         df_to_process['id'] = df_to_process.index
         self.ev_df['nomatch'] = df_to_process
         data_dict = self.get_processed_data(df_to_process, chunk_size=500)
-        emb_pairs, word_pairs = self.get_word_pairs(df_to_process, data_dict)
-        features, word_relevance = self.get_relevance_scores(emb_pairs, word_pairs)
+        res = self.get_word_pairs(df_to_process, data_dict)
+        features, word_relevance = self.get_relevance_scores(*res)
         res_df = evaluate_df(word_relevance, df_to_process, predictor)
         res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
         no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
