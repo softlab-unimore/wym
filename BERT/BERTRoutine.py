@@ -271,10 +271,10 @@ class Routine():
                 with open(tmp_path, 'wb') as file:
                     pickle.dump(emb_pairs, file)
                 emb_pairs_dict[df_name] = emb_pairs
-            if self.sentence_embedding:
-                tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
-                with open(tmp_path, 'wb') as file:
-                    pickle.dump(self.sentence_emb_pairs_dict, file)
+                if self.sentence_embedding:
+                    tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
+                    with open(tmp_path, 'wb') as file:
+                        pickle.dump(self.sentence_emb_pairs_dict, file)
 
         self.words_pairs_dict = words_pairs_dict
         self.emb_pairs_dict = emb_pairs_dict

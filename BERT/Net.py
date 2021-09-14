@@ -68,6 +68,7 @@ class DatasetAccoppiate(Dataset):
         tmp_res = word_pairs_corrected['label_corrected_mean']
 
         # tmp_res = (word_pairs_corrected['label_corrected_mean'] * 4 + word_pairs_corrected['label_corrected']) / 5
+        # tmp_res =  word_pairs_corrected['label_corrected']
 
         return torch.tensor(tmp_res.values, dtype=torch.float).reshape([-1, 1])
 

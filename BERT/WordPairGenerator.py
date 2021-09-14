@@ -211,7 +211,6 @@ class WordPairGenerator(EMFeatures):
             assert len(pairs.shape) == len(np.array(unpaired).shape), f'{pairs}, {unpaired}, {to_drop}'
             pairs = np.concatenate([pairs, np.array(unpaired)])
             sim = [sim_mat[r, c] if r != -1 and c != -1 else 0 for r, c in pairs]
-
         return pairs, sim
 
     @staticmethod
@@ -352,7 +351,8 @@ class WordPairGenerator(EMFeatures):
             if len(l_emb_unp) > 0 and len(r_emb_unp) > 0:
                 tmp_word_pairs, tmp_emb_pairs, pairs = self.generate_pairs(words_l, words_r, l_emb_unp, r_emb_unp,
                                                                            return_pairs=True,
-                                                                           unpair_threshold=self.cross_attr_threshold)
+                                                                           unpair_threshold=self.cross_attr_threshold,
+                                                                           duplicate_threshold=1.1)
                 new_unpaired_words = deepcopy(WordPairGenerator.word_pair_empty)
                 new_unpaired_words.update(left_pos=[], right_pos=[])
                 if len(tmp_emb_pairs) > 0:
@@ -393,12 +393,13 @@ class WordPairGenerator(EMFeatures):
                 if all_side == 'right':
                     tmp_word_pairs, tmp_emb, pairs = self.generate_pairs(unpaired_words[unp_side + '_word'], words2,
                                                                          emb_unp, emb2, return_pairs=True,
-                                                                         unpair_threshold=self.duplicate_threshold)
+                                                                         unpair_threshold=self.duplicate_threshold,
+                                                                         duplicate_threshold=1.1)
                 elif all_side == 'left':
                     tmp_word_pairs, tmp_emb, pairs = self.generate_pairs(words1, unpaired_words[unp_side + '_word'],
-                                                                         emb1, emb_unp,
+                                                                         emb1, emb_unp, return_pairs=True,
                                                                          unpair_threshold=self.duplicate_threshold,
-                                                                         return_pairs=True)
+                                                                         duplicate_threshold=1.1)
                 side_mask = np.array(tmp_word_pairs[unp_side + '_word']) != '[UNP]'
                 for key in tmp_word_pairs.keys():
                     word_pair[key] = np.concatenate([word_pair[key], np.array(tmp_word_pairs[key])[side_mask]])

@@ -130,7 +130,7 @@ class WordEmbedding():
             else:
                 emb_all.append(tmp_emb_all[index])
                 words.append(tmp_words[index])
-                sentences_emb.append(tmp_sentences[index])
+                sentences_emb.append(tmp_sentences[index].cpu())
                 index += 1
 
         words_cutted = []
