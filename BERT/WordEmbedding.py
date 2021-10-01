@@ -125,12 +125,14 @@ class WordEmbedding():
         for i in sentences:
             if i is None:
                 emb_all.append(torch.tensor([0]).to(self.device))
-                sentences_emb.append(torch.tensor([0]).to(self.device))
+                if self.sentence_embedding:
+                    sentences_emb.append(torch.tensor([0]).to(self.device))
                 words.append(['[SEP]'])
             else:
                 emb_all.append(tmp_emb_all[index])
                 words.append(tmp_words[index])
-                sentences_emb.append(tmp_sentences[index].cpu())
+                if self.sentence_embedding:
+                    sentences_emb.append(tmp_sentences[index].cpu())
                 index += 1
 
         words_cutted = []
@@ -167,7 +169,8 @@ class WordEmbedding():
             words_list += words
         if len(emb_list) > 0:
             emb_list = np.concatenate(emb_list)
-            sent_emb_list = np.concatenate(sent_emb_list)
+            if self.sentence_embedding:
+                sent_emb_list = np.concatenate(sent_emb_list)
         if self.sentence_embedding:
             return emb_list, words_list, sent_emb_list
         else:

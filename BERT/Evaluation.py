@@ -1,87 +1,215 @@
-
-
+from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import roc_auc_score
+import plotly.express as px
+from sklearn.metrics import roc_curve, auc
 import numpy as np
 import pandas as pd
 from tqdm.notebook import tqdm
+import re
+from lime.lime_text import LimeTextExplainer
 
 
 def get_prefix(word_relevance_df, el, side: str):
-  assert side in ['left','right']
-  word_relevance_el = word_relevance_df.reset_index(drop=True)
-  mapper = Mapper([x for x in el.columns if x.startswith(side+'_') and x != side+'_id'], r' ')
-  available_prefixes = mapper.encode_attr(el).split()
-  assigned_pref = []
-  word_prefixes = []
-  attr_to_code = inv_map = {v: k for k, v in mapper.attr_map.items()}
-  for i in range(word_relevance_el.shape[0]):
-    word = str(word_relevance_el.loc[i, side+'_word'])
-    if word == '[UNP]':
-      word_prefixes.append('[UNP]')
-    else:
-      col = word_relevance_el.loc[i, side+'_attribute']
-      col_code = attr_to_code[side + '_'+ col]
-      turn_prefixes = [x for x in available_prefixes if x[0] == col_code]
-      idx = 0
-      while idx < len(turn_prefixes) and  word != turn_prefixes[idx][4:]:
-        idx+=1
-      if idx < len(turn_prefixes):
-        tmp = turn_prefixes[idx]
-        del turn_prefixes[idx]
-        word_prefixes.append(tmp)
-        assigned_pref.append(tmp)
-      else:
-        idx = 0
-        while idx < len(assigned_pref) and  word != assigned_pref[idx][4:]:
-          idx+=1
-        if idx < len(assigned_pref):
-          word_prefixes.append(assigned_pref[idx])
+    assert side in ['left', 'right']
+    word_relevance_el = word_relevance_df.copy().reset_index(drop=True)
+    mapper = Mapper([x for x in el.columns if x.startswith(side + '_') and x != side + '_id'], r' ')
+    available_prefixes = mapper.encode_attr(el).split()
+    assigned_pref = []
+    word_prefixes = []
+    attr_to_code = inv_map = {v: k for k, v in mapper.attr_map.items()}
+    for i in range(word_relevance_el.shape[0]):
+        word = str(word_relevance_el.loc[i, side + '_word'])
+        if word == '[UNP]':
+            word_prefixes.append('[UNP]')
         else:
-          assert False, word
+            col = word_relevance_el.loc[i, side + '_attribute']
+            col_code = attr_to_code[side + '_' + col]
+            turn_prefixes = [x for x in available_prefixes if x[0] == col_code]
+            idx = 0
+            while idx < len(turn_prefixes) and word != turn_prefixes[idx][4:]:
+                idx += 1
+            if idx < len(turn_prefixes):
+                tmp = turn_prefixes[idx]
+                del turn_prefixes[idx]
+                word_prefixes.append(tmp)
+                assigned_pref.append(tmp)
+            else:
+                idx = 0
+                while idx < len(assigned_pref) and word != assigned_pref[idx][4:]:
+                    idx += 1
+                if idx < len(assigned_pref):
+                    word_prefixes.append(assigned_pref[idx])
+                else:
+                    assert False, word
 
-  word_relevance_el[side + '_word_prefixes'] = word_prefixes
-  return word_relevance_el
+    word_relevance_el[side + '_word_prefixes'] = word_prefixes
+    return word_relevance_el
+
 
 def append_prefix(word_relevance, df):
-  ids = word_relevance['id'].unique()
-  res_df = []
-  for id in ids:
-    el = df[df.id==id]
-    word_relevance_el = word_relevance[word_relevance.id==id]
-    word_relevance_el = get_prefix(word_relevance_el, el, 'left')
-    word_relevance_el = get_prefix(word_relevance_el, el, 'right')
-    res_df.append(word_relevance_el.copy())
-  return pd.concat(res_df)
-
+    ids = word_relevance['id'].unique()
+    res_df = []
+    for id in ids:
+        el = df[df.id == id]
+        word_relevance_el = word_relevance[word_relevance.id == id]
+        word_relevance_el = get_prefix(word_relevance_el, el, 'left')
+        word_relevance_el = get_prefix(word_relevance_el, el, 'right')
+        res_df.append(word_relevance_el.copy())
+    return pd.concat(res_df)
 
 
 def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', 'left_id', 'right_id', 'label']):
-    evaluation_df = df_to_process.copy().replace(pd.NA,'')
+    assert df_to_process.shape[
+               0] > 0, f'DataFrame to evaluate must have some elements. Passed df has shape {df_to_process.shape[0]}'
+    evaluation_df = df_to_process.copy().replace(pd.NA, '')
     word_relevance_prefix = append_prefix(word_relevance, evaluation_df)
     word_relevance_prefix['impact'] = word_relevance_prefix['pred'] - 0.5
     word_relevance_prefix['conf'] = 'bert'
 
     res_list = []
-    for side in ['left','right']:
+    for side in ['left', 'right']:
         evaluation_df['pred'] = predictor(evaluation_df)
         side_word_relevance_prefix = word_relevance_prefix.copy()
         side_word_relevance_prefix['word_prefix'] = side_word_relevance_prefix[side + '_word_prefixes']
         side_word_relevance_prefix = side_word_relevance_prefix.query(f'{side}_word != "[UNP]"')
         ev = Evaluate_explanation(side_word_relevance_prefix, evaluation_df, predict_method=predictor,
-                                                       exclude_attrs=exclude_attrs, percentage=.25, num_round=3)
+                                  exclude_attrs=exclude_attrs, percentage=.25, num_round=3)
 
         fixed_side = 'right' if side == 'left' else 'left'
-        res_df = ev.evaluate_set(range(df_to_process.shape[0]), 'bert', variable_side=side, fixed_side=fixed_side,
+        res_df = ev.evaluate_set(df_to_process.id.values, 'bert', variable_side=side, fixed_side=fixed_side,
                                  utility=True)
         res_list.append(res_df.copy())
 
     return pd.concat(res_list)
 
 
-import re
+def correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_ids, num_samples=250):
+    """
+    test code
+    from Evaluation import correlation_vs_landmark
+    df = routine.valid_merged
+    word_relevance = routine.words_pairs_dict['valid']
+    match_ids, no_match_ids = [10],[15]
+    predictor = routine.get_predictor()
+    correlation_data = correlation_vs_landmark(df, word_relevance, predictor, match_ids,
+                                                                       no_match_ids)
+    """
+    explainer = Landmark(predictor, df, exclude_attrs=['id', 'label'], lprefix='left_', rprefix='right_')
+    res_list_of_dict = []
+    for match_code, id_samples in zip(['match', 'nomatch'], [match_ids, no_match_ids]):
+        res_dict = {'match_code': match_code}
+        print(f'Evaluating {match_code}')
+        for id in tqdm(id_samples):
+            word_relevance_sample = word_relevance[word_relevance.id == id]
+            df_sample = df[df.id == id]
+            # display(df_sample)
+            res_dict.update(id=id)
+            exp = explainer.explain(df_sample, num_samples=num_samples, conf='single')
+            for side, landmark_side in zip(['left', 'right'], ['right', 'left']):
+                # print(f'side:{side} -- landmark:{landmark_side}')
+                res_dict.update(side=side)
+                # display(exp)
+                landmark_impacts = exp.query(f'conf =="{landmark_side}_landmark"')
+                landmark_impacts[side + '_attribute'] = landmark_impacts['column'].str[len(side + '_'):]
+                landmark_impacts[side + '_word'] = landmark_impacts['word']
+                landmark_impacts = landmark_impacts[[side + '_word', side + '_attribute', 'impact']]
+                words_relevance_tmp = word_relevance_sample.query(side + '_attribute != "[UNP]"')[
+                    [side + '_word', side + '_attribute', 'id', 'pred']]
+                words_relevance_tmp['relevance'] = words_relevance_tmp['pred']
+                # display(words_relevance_tmp, landmark_impacts)
+                impacts_comparison = words_relevance_tmp.merge(landmark_impacts,
+                                                               on=[side + '_attribute', side + '_word'])
+                # display(impacts_comparison)
+                for method in ['pearson', 'kendall', 'spearman']:
+                    corr = impacts_comparison['impact'].corr(impacts_comparison['relevance'], method=method)
+                    res_dict[method] = corr
+                res_list_of_dict.append(res_dict.copy())
+    return pd.DataFrame(res_list_of_dict)
 
-import numpy as np
-import pandas as pd
-from lime.lime_text import LimeTextExplainer
+
+def generate_altered_df(df, y_true, word_relevance_df, token_remotion_fn):
+    new_df = df.copy()
+    for i in tqdm(range(df.shape[0])):
+        el = new_df.iloc[[i]]
+        id = el['id'].values[0]
+        wr_el = word_relevance_df.query(f'id == {id}')
+
+        tokens_to_remove = token_remotion_fn(wr_el)
+        for side in ['left', 'right']:
+            tokens_to_remove_side = tokens_to_remove[[side + '_word', side + '_attribute']].values
+            for word, attr in tokens_to_remove_side:
+                if word != '[UNP]':
+                    try:
+                        el[side + '_' + attr] = el[side + '_' + attr].str.replace(word, '', regex=False).str.strip()
+                    except Exception as e:
+                        print(e)
+                        display(el, side + '_' + attr, word)
+                        assert False
+        if (el[np.setdiff1d(new_df.columns, ['id', 'left_id', 'label', 'right_id'])] != '').any(1).values[0]:
+            new_df.iloc[[i]] = el
+            # else: # TODO delete
+            # print('Not inserted')
+            # display(el)
+            # display('Inserted', new_df.iloc[[i]])
+
+    return new_df
+
+
+def process_roc_auc(y_true, y_pred, plot=True):
+    # display(df.iloc[[10]], new_df.iloc[[10]])
+    if plot:
+        fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+
+        fig = px.area(
+            x=fpr, y=tpr,
+            title=f'ROC Curve (AUC={auc(fpr, tpr):.4f})',
+            labels=dict(x='False Positive Rate', y='True Positive Rate'),
+            width=700, height=500
+        )
+        fig.add_shape(
+            type='line', line=dict(dash='dash'),
+            x0=0, x1=1, y0=0, y1=1
+        )
+
+        fig.update_yaxes(scaleanchor="x", scaleratio=1)
+        fig.update_xaxes(constrain='domain')
+        fig.show()
+    auc_score = roc_auc_score(y_true, y_pred)
+    return auc_score
+
+
+def token_remotion_delta_performance(df, y_true, word_relevance, predictor, k_list=[10, 3, 5, 1], plot=True):
+    useful = lambda x: x.sort_values('pred', ascending=(x.label.values[0] == 0))
+    # ascending (low is useful) for nomatch
+
+    useless = lambda x: x.sort_values('pred', ascending=(x.label.values[0] == 1))
+    # ascending (low is useless (NOT useful)) for match
+    random = lambda x: x.sample(x.shape[0])
+
+    res_list = []
+    tmp_dict = {}
+    pred_dict = {}
+    print('Evaluating delta performance on full dataset with token remotion.')
+    for k in tqdm(k_list):
+        tmp_dict.update(n_tokens=k)
+        for fn, fn_name in zip([useful, useless, random], ['del_useful', 'del_useless', 'del_random']):
+            tmp_dict['function'] = fn_name
+            final_fn = lambda x: fn(x).head(k)
+            code = fn_name + '_' + str(k)
+            print(code)
+            altered_df = generate_altered_df(df, y_true, word_relevance, final_fn)
+            new_pred = predictor(altered_df)
+            auc_score = process_roc_auc(y_true, new_pred, plot)
+            tmp_dict['auc_score'] = auc_score
+            for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
+                tmp_dict[score_name] = scorer(y_true, new_pred > .5)
+
+            res_list.append(tmp_dict.copy())
+
+            pred_dict[code] = new_pred
+    return pd.DataFrame(res_list)
+
+
 
 
 class Landmark(object):
@@ -89,7 +217,6 @@ class Landmark(object):
     def __init__(self, predict_method, dataset, exclude_attrs=['id', 'label'], split_expression=' ',
                  lprefix='left_', rprefix='right_', **argv, ):
         """
-
         :param predict_method: of the model to be explained
         :param dataset: containing the elements that will be explained. Used to save the attribute structure.
         :param exclude_attrs: attributes to be excluded from the explanations
@@ -176,7 +303,6 @@ class Landmark(object):
                          add_after_perturbation=None, overlap=True, num_samples=500, **argv):
         """
         Main method to wrap the explainer and generate an landmark. A sort of Facade for the explainer.
-
         :param el: DataFrame containing the element to be explained.
         :return: landmark DataFrame
         """
@@ -241,7 +367,6 @@ class Landmark(object):
     def explanation_to_df(self, explanation, words, attribute_map, id):
         """
         Generate the DataFrame of the landmark from the LIME landmark.
-
         :param explanation: LIME landmark
         :param words: words of the element subject of the landmark
         :param attribute_map: attribute map to decode the attribute from a prefix
@@ -260,7 +385,6 @@ class Landmark(object):
     def compute_tokens(self, el):
         """
         Divide tokens of the descriptions for each column pair in inclusive and exclusive sets.
-
         :param el: pd.DataFrame containing the 2 description to analyze
         """
         tokens = {col: np.array(self.splitter.split(str(el[col].values[0]))) for col in self.cols}
@@ -280,7 +404,6 @@ class Landmark(object):
         """
         Takes tokens computed before from the src_sside with overlap or not
         and inject them into el in columns specified in dst_columns.
-
         """
         if not overlap:
             tokens_to_add = self.tokens_not_overlapped
@@ -314,10 +437,8 @@ class Landmark(object):
 
     def restructure_strings(self, perturbed_strings):
         """
-
         Decode :param perturbed_strings into DataFrame and
         :return reconstructed pairs appending the landmark entity.
-
         """
         df_list = []
         for single_row in perturbed_strings:
@@ -363,6 +484,9 @@ class Landmark(object):
 
         return view
 
+    def plot(self, explanation, el, figsize=(16, 6)):
+        exp_double = self.double_explanation_conversion(explanation, el)
+        PlotExplanation.plot(exp_double, figsize)
 
 
 class Mapper(object):
@@ -410,8 +534,6 @@ class Mapper(object):
         return pd.DataFrame(res_list)
 
 
-
-
 class Evaluate_explanation(Landmark):
 
     def __init__(self, impacts_df, dataset, percentage=.25, num_round=10, **argv):
@@ -444,7 +566,7 @@ class Evaluate_explanation(Landmark):
             for tokens_to_remove in combinations:
                 enough_tokens = True
                 tmp_encoded = self.variable_encoded
-                if len(tokens_to_remove) > 0 and max(tokens_to_remove) >= self.words_with_prefixes.shape[0]:
+                if len(tokens_to_remove) > 0 and max(np.abs(tokens_to_remove)) >= self.words_with_prefixes.shape[0]:
                     enough_tokens = False
                 if sign is not None and enough_tokens is True:
                     for i, t in enumerate(tokens_to_remove):
@@ -500,10 +622,10 @@ class Evaluate_explanation(Landmark):
         res_list = []
 
         change_class_tokens = self.get_tokens_to_change_class(self.start_pred, self.impacts)
-        combinations_to_remove = {#'change_class': [change_class_tokens],
-                                  #'single_word': [[x] for x in np.arange(self.impacts.shape[0])],
-                                  # 'all_opposite': [[pos for pos, impact in enumerate(self.impacts) if
-                                  #                   (impact > 0) == (self.start_pred > .5)]],
+        combinations_to_remove = {  # 'change_class': [change_class_tokens],
+            # 'single_word': [[x] for x in np.arange(self.impacts.shape[0])],
+            # 'all_opposite': [[pos for pos, impact in enumerate(self.impacts) if
+            #                   (impact > 0) == (self.start_pred > .5)]],
             'pos1': [[0]],
             'pos2': [[0, 1]],
             'pos3': [[0, 1, 2]],
@@ -514,9 +636,8 @@ class Evaluate_explanation(Landmark):
             'neg5': [[-1, -2, -3, -4, -5]]
         }
 
-
-        #combinations_to_remove['change_class_D.10'] = [self.get_tokens_to_change_class(self.start_pred, self.impacts, delta=.1)]
-        #combinations_to_remove['change_class_D.15'] = [ self.get_tokens_to_change_class(self.start_pred, self.impacts, delta=.15)]
+        # combinations_to_remove['change_class_D.10'] = [self.get_tokens_to_change_class(self.start_pred, self.impacts, delta=.1)]
+        # combinations_to_remove['change_class_D.15'] = [ self.get_tokens_to_change_class(self.start_pred, self.impacts, delta=.15)]
 
         description_to_evaluate, comb_name_sequence, tokens_to_remove_sequence = self.generate_descriptions(
             combinations_to_remove)
