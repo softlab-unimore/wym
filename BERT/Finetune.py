@@ -31,7 +31,7 @@ def create_cosine_input_format(sentences):
     samples.append(inp_example)
   return samples
 
-def finetune_BERT(routine, num_epochs = 10):
+def finetune_BERT(routine, num_epochs = 10, model_save_path=None):
     sent_train = create_sentence(routine.train.copy())
     sent_valid = create_sentence(routine.valid.copy())
     sent_test = create_sentence(routine.test.copy())
@@ -42,7 +42,8 @@ def finetune_BERT(routine, num_epochs = 10):
 
     # Read the dataset
     train_batch_size = 64
-    model_save_path = os.path.join(routine.model_files_path, 'sBERT')
+    if model_save_path is None:
+        model_save_path = os.path.join(routine.model_files_path, 'sBERT')
     model_args = {'output_hidden_states': True, 'output_attentions': True}
     word_embedding_model = models.Transformer(model_name, model_args=model_args)
 

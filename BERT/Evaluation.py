@@ -76,8 +76,7 @@ def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', '
                                   exclude_attrs=exclude_attrs, percentage=.25, num_round=3)
 
         fixed_side = 'right' if side == 'left' else 'left'
-        res_df = ev.evaluate_set(df_to_process.id.values, 'bert', variable_side=side, fixed_side=fixed_side,
-                                 utility=True)
+        res_df = ev.evaluate_set(df_to_process.id.values, 'bert', variable_side=side, fixed_side=fixed_side, utility=True)
         res_list.append(res_df.copy())
 
     return pd.concat(res_list)
@@ -179,10 +178,10 @@ def process_roc_auc(y_true, y_pred, plot=True):
 
 
 def token_remotion_delta_performance(df, y_true, word_relevance, predictor, k_list=[10, 3, 5, 1], plot=True):
-    useful = lambda x: x.sort_values('pred', ascending=(x.label.values[0] == 0))
+    useful = lambda x: x[(x['pred'] >.5) == (x.label.values[0] == 1)].sort_values('pred', ascending=(x.label.values[0] == 0))
     # ascending (low is useful) for nomatch
 
-    useless = lambda x: x.sort_values('pred', ascending=(x.label.values[0] == 1))
+    useless = lambda x: x[(x['pred'] <.5) == (x.label.values[0] == 1)].sort_values('pred', ascending=(x.label.values[0] == 1))
     # ascending (low is useless (NOT useful)) for match
     random = lambda x: x.sample(x.shape[0])
 

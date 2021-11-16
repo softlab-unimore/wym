@@ -24,7 +24,7 @@ class TanhScaler(StandardScaler):
 class DatasetAccoppiate(Dataset):
     def __init__(self, word_pairs, embedding_pairs, sentence_embedding_pairs=None):
         X = self.preprocess(embedding_pairs, sentence_embedding_pairs=sentence_embedding_pairs)
-        
+
         self.X = X
 
         self.y = self.preprocess_label(word_pairs, embedding_pairs)
@@ -152,7 +152,7 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     best_acc = 1
     overfitting_counter = 0
     best_epoch = 0
-    
+
     for epoch in range(num_epochs):
         out = f'Epoch {epoch + 1:3d}/{num_epochs}: '
         # gc.collect()
@@ -169,7 +169,7 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
 
             # Iterate over data.
             i = 0
-            for inputs, labels in dataloaders[phase]:                
+            for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
                 i += 1
@@ -231,4 +231,3 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
     last_model = copy.deepcopy(model)
     model.load_state_dict(best_model_wts)
     return model, acc_history, last_model
-

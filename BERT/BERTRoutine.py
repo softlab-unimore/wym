@@ -41,8 +41,9 @@ from WordPairGenerator import WordPairGenerator
 class Routine():
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
-                 col_to_drop=[],
-                 softlab_path='./content/drive/Shareddrives/SoftLab/', verbose=True, we_finetuned=False,
+                 col_to_drop=[], model_files_path=None,
+                 softlab_path='./content/drive/Shareddrives/SoftLab/',
+                 verbose=True, we_finetuned=False,
                  we_finetune_path=None, num_epochs=10,
                  sentence_embedding=True):
         if device is None:
@@ -51,8 +52,12 @@ class Routine():
         simplefilter(action='ignore', category=FutureWarning)
         simplefilter(action='ignore')
         pd.options.display.float_format = '{:.4f}'.format
+        pd.options.display.max_rows = 150
+        pd.options.display.max_columns = 150
+        pd.options.display.max_colwidth = 100
+        pd.options.display.precision = 15
+        pd.options.display.max_info_columns = 150
         plt.rcParams["figure.figsize"] = (18, 6)
-        self.softlab_path = os.path.join(softlab_path)
         self.softlab_path = os.path.join(softlab_path)
         self.reset_files = reset_files  # @ param {type:"boolean"}
         self.reset_networks = reset_networks  # @ param {type:"boolean"}
@@ -60,10 +65,15 @@ class Routine():
         self.model_name = model_name
         self.feature_extractor = FeatureExtractor()
         self.verbose = verbose
-        if dataset_path == None:
+        if dataset_path is None:
             self.dataset_path = os.path.join(softlab_path, 'Dataset', 'Entity Matching', dataset_name)
+        else:
+            self.dataset_path = dataset_path
         self.project_path = os.path.join(softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
-        self.model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
+        if model_files_path is None:
+            self.model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
+        else:
+            self.model_files_path = model_files_path
         try:
             os.makedirs(self.model_files_path)
         except:
@@ -159,7 +169,7 @@ class Routine():
             if we_finetune_path is not None:
                 finetuned_path = we_finetune_path
             elif we_finetuned == 'SBERT':
-                finetuned_path = finetune_BERT(self, num_epochs=num_epochs)
+                    finetuned_path = finetune_BERT(self, num_epochs=num_epochs)
             else:
                 finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
             self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path,
@@ -187,7 +197,7 @@ class Routine():
                     tmp_path = os.path.join(self.model_files_path, 'sentence_emb_' + df_name + '.csv')
                     with open(tmp_path, 'rb') as file:
                         self.sentence_embedding_dict[df_name] = torch.load(file, map_location=torch.device(self.device))
-            print('Loaded ')
+            print('Loaded embeddings.')
         except Exception as e:
             print(e)
             self.we.verbose = self.verbose
@@ -214,7 +224,7 @@ class Routine():
         if self.sentence_embedding:
             assert self.sentence_embedding_dict['table_A'][0].shape == torch.Size(
                 [
-                    768]), f'Sentence emb has shape: {routine.sentence_embedding_dict["table_A"][0].shape}. It must be [768]!'
+                    768]), f'Sentence emb has shape: {self.sentence_embedding_dict["table_A"][0].shape}. It must be [768]!'
 
     def get_processed_data(self, df, chunk_size=500, verbose=False):
         we = self.we
@@ -254,7 +264,7 @@ class Routine():
                     tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
                     with open(tmp_path, 'rb') as file:
                         self.sentence_emb_pairs_dict[df_name] = pickle.load(file)
-            print('Loaded ')
+            print('Loaded word pairs')
         except Exception as e:
             print(e)
 
@@ -390,16 +400,18 @@ class Routine():
         features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
         return features, word_pair_corrected
 
-    def EM_modelling(self, *args, do_feature_selection=False):
+    def EM_modelling(self, *args, do_evaluation=True, do_feature_selection=False):
 
         if hasattr(self, 'models') == False:
+            mmScaler = MinMaxScaler()
+            mmScaler.clip = False
             self.models = [
-                ('LR', Pipeline([('mm', MinMaxScaler()), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
-                ('LDA', Pipeline([('mm', MinMaxScaler()), ('LDA', LinearDiscriminantAnalysis())])),
-                ('KNN', Pipeline([('mm', MinMaxScaler()), ('KNN', KNeighborsClassifier())])),
+                ('LR', Pipeline([('mm', copy.copy(mmScaler)), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
+                ('LDA', Pipeline([('mm', copy.copy(mmScaler)), ('LDA', LinearDiscriminantAnalysis())])),
+                ('KNN', Pipeline([('mm', copy.copy(mmScaler)), ('KNN', KNeighborsClassifier())])),
                 ('CART', DecisionTreeClassifier(random_state=0)),
                 ('NB', GaussianNB()),
-                ('SVM', Pipeline([('mm', MinMaxScaler()), ('SVM', SVC(probability=True, random_state=0))])),
+                ('SVM', Pipeline([('mm', copy.copy(mmScaler)), ('SVM', SVC(probability=True, random_state=0))])),
                 ('AB', AdaBoostClassifier(random_state=0)),
                 ('GBM', GradientBoostingClassifier(random_state=0)),
                 ('RF', RandomForestClassifier(random_state=0)),
@@ -481,27 +493,39 @@ class Routine():
         best_model.fit(X_train, y_train)
         model_data = {'features': best_features, 'model': best_model}
         tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
+        self.best_model_data = model_data
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
 
-        linear_model = LogisticRegression(random_state=0)
-        X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label.astype(int)
+
+        linear_model = Pipeline([('LR', LogisticRegression(max_iter=200, random_state=0))])
+        # LogisticRegression(max_iter=200, random_state=0)
+        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
         linear_model.fit(X_train, y_train)
+        model_data = {'features': best_features, 'model': linear_model}
         tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
         with open(tmp_path, 'wb') as file:
-            pickle.dump(linear_model, file)
+            pickle.dump(model_data, file)
 
-        self.evaluation(self.valid_merged)
+        if do_evaluation:
+            self.evaluation(self.valid_merged)
         return res_df
 
-    def get_match_score(self, features_df):
-        tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
+    def get_match_score(self, features_df, lr=False):
+
+        if lr is True:
+            tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
+        else:
+            tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
         with open(tmp_path, 'rb') as file:
             model_data = pickle.load(file)
         self.best_model_data = model_data
         X = features_df[model_data['features']].to_numpy()
-        model = model_data['model']
-        return model.predict_proba(X)[:, 1]
+        self.model = model_data['model']
+        if isinstance(self.model, Pipeline) and isinstance(self.model[0], MinMaxScaler):
+            self.model[0].clip = False
+
+        return self.model.predict_proba(X)[:, 1]
 
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
@@ -522,7 +546,7 @@ class Routine():
         def predictor(df_to_process, routine, return_data=False):  # m1
             df_to_process = df_to_process.copy().reset_index(drop=True)
             df_to_process['id'] = df_to_process.index
-            data_dict = routine.get_processed_data(df_to_process, chunk_size=500)
+            data_dict = routine.get_processed_data(df_to_process, chunk_size=400)
             res = routine.get_word_pairs(df_to_process, data_dict)
             features, word_relevance = routine.get_relevance_scores(*res)
             if return_data:
@@ -549,7 +573,7 @@ class Routine():
         # df_to_process['id'] = df_to_process.index
         # self.ev_df['match'] = df_to_process
         df = df.copy().replace(pd.NA, '')
-        data_dict = self.get_processed_data(df, chunk_size=500)
+        data_dict = self.get_processed_data(df, chunk_size=400)
         res = self.get_word_pairs(df, data_dict)
         features, word_relevance = self.get_relevance_scores(*res)
         pred = self.get_match_score(features)
