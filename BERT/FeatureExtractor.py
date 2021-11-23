@@ -37,9 +37,10 @@ class FeatureExtractorGeneral:
             for x in possible_unpaired:
                 df[feature_name + '_diff' + x] = df[feature_name + '_paired'] - df[
                     feature_name + '_unpaired' + x]
-                df[feature_name + '_perc' + x] = (df[feature_name + '_paired'] + 1e-9) / (
+                df[feature_name + '_perc' + x] = (df[feature_name + '_paired']) / (
                         1e-9 + df[feature_name + '_paired'] + df[
                     feature_name + '_unpaired' + x])
+
             # df[feature_name + '_diff' + '_2min'] = df[feature_name + '_paired'] - (df[feature_name + '_unpaired_min'] * 2)
             # df[feature_name + '_perc' + '_2min'] = df[feature_name + '_paired'] / ( df[feature_name + '_paired'] + df[feature_name + '_unpaired_min'] * 2)
         return df.fillna(null_value)
@@ -113,12 +114,13 @@ class FeatureExtractor(FeatureExtractorGeneral):
             stat = stat.merge(df, on='id', how='outer').sort_index()
             if 'id' in stat.columns:
                 stat = stat.set_index('id')
+
         # except Exception as e:
         #     for i, df in enumerate([paired_stat, unpaired_stat, unpaired_stat_full, all_stat, side_stat]):
         #         print(i)
         #         display(df)
         # .merge(unpaired_stat, on='id', how='outer')
-        stat = FeatureExtractor().compute_derived_features(stat, function_names, possible_unpaired=[''])
+        stat = FeatureExtractor().compute_derived_features(stat.fillna(null_value), function_names, possible_unpaired=[''])
         if 'id' in stat.columns:
             stat = stat.set_index('id')
         stat = stat.sort_index()
@@ -163,7 +165,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
         unpaired_stat_full = unpaired_stat_full.fillna(null_value)
         unpaired_stat_full.columns += '_unpaired'
 
-        non_com_df = word_pairs_df[(word_pairs_df.left_word == '[UNP]') | (word_pairs_df.right_word == '[UNP]')].copy()
+        non_com_df = non_com_df[(non_com_df.left_word == '[UNP]') | (non_com_df.right_word == '[UNP]')].copy()
         non_com_df['comp_pred'] = (1 - non_com_df['pred']) if complementary else non_com_df['pred']
         non_com_df['side'] = np.where((non_com_df.left_word == '[UNP]'), 'left', 'right')
         stat = (non_com_df.groupby(['id', 'side'])['comp_pred']).agg(functions)
