@@ -173,6 +173,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
         side_stat.columns = ['_'.join(col) for col in side_stat.columns]
         side_stat = side_stat.fillna(null_value)
         side_stat = FeatureExtractorGeneral.compute_min_max_features(side_stat, function_names, null_value=null_value)
+        side_stat.index.name= 'id'
 
         # try:
         stat = paired_stat
