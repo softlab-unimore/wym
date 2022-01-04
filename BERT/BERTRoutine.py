@@ -40,7 +40,7 @@ from WordEmbedding import WordEmbedding
 from WordPairGenerator import WordPairGenerator, WordPairGeneratorEdit
 
 
-class Routine():
+class Routine:
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
                  col_to_drop=[], model_files_path=None,
