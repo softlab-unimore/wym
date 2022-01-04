@@ -4,9 +4,14 @@ import numpy as np
 import torch
 from tqdm.notebook import tqdm
 from transformers import BertModel, BertTokenizer
+import copy
 
+
+def check_memory():
+    print('GPU memory: %.1f MB' % (torch.cuda.memory_allocated() // 1024 ** 2))
 
 class WordEmbedding():
+
     def __init__(self, device='auto', verbose=False, model_path='bert-base-uncased', sentence_embedding=False):
         self.sentence_embedding = sentence_embedding
         self.model = BertModel.from_pretrained(model_path, output_hidden_states=True)
@@ -43,6 +48,16 @@ class WordEmbedding():
 
     def get_token_embeddings(self, token_list):
         with torch.no_grad():
+            # check_memory()
+            # # model = copy.deepcopy(self.model)
+            # try:
+            #     outputs = self.model(token_list['input_ids'].to(self.device),
+            #                      token_list['attention_mask'].to(self.device),
+            #                      token_list['token_type_ids'].to(self.device))
+            #     check_memory()
+            # except Exception as e:
+            #     check_memory()
+            #     raise e
             outputs = self.model(token_list['input_ids'].to(self.device),
                                  token_list['attention_mask'].to(self.device),
                                  token_list['token_type_ids'].to(self.device))
@@ -52,6 +67,8 @@ class WordEmbedding():
             # hidden states from all layers. See the documentation for more details:
             # https://huggingface.co/transformers/model_doc/bert.html#bertmodel
             hidden_states = outputs[2]
+            # outputs.detach()
+
         token_embeddings = torch.stack(hidden_states, dim=0)
         # token_embeddings = torch.squeeze(token_embeddings, dim=1)
         token_embeddings = token_embeddings.permute(0, 1, 2, 3)  # layers, sentences, words, weights
@@ -124,15 +141,15 @@ class WordEmbedding():
         index = 0
         for i in sentences:
             if i is None:
-                emb_all.append(torch.tensor([0]).to(self.device))
+                emb_all.append(torch.tensor([0]).to('cpu'))
                 if self.sentence_embedding:
-                    sentences_emb.append(torch.tensor([0]).to(self.device))
+                    sentences_emb.append(torch.tensor([0]).to('cpu'))
                 words.append(['[SEP]'])
             else:
-                emb_all.append(tmp_emb_all[index])
+                emb_all.append(tmp_emb_all[index].to('cpu'))
                 words.append(tmp_words[index])
                 if self.sentence_embedding:
-                    sentences_emb.append(tmp_sentences[index].cpu())
+                    sentences_emb.append(tmp_sentences[index].to('cpu'))
                 index += 1
 
         words_cutted = []
@@ -152,14 +169,15 @@ class WordEmbedding():
     def generate_embedding(self, df, chunk_size=500):
         emb_list, words_list, sent_emb_list = [], [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
+
+        torch.cuda.empty_cache()
         if self.verbose:
             print('Computing embedding')
             to_cycle = tqdm(range(n_chunk))
         else:
             to_cycle = range(n_chunk)
         for chunk in to_cycle:
-            gc.collect()
-            torch.cuda.empty_cache()
+            # assert False
             if self.sentence_embedding:
                 emb, words, sent_emb = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
                 sent_emb_list.append(sent_emb)
@@ -167,6 +185,9 @@ class WordEmbedding():
                 emb, words = self.get_embedding_df(df.iloc[chunk * chunk_size:(chunk + 1) * chunk_size])
             emb_list.append(emb)
             words_list += words
+
+            gc.collect()
+            torch.cuda.empty_cache()
         if len(emb_list) > 0:
             emb_list = np.concatenate(emb_list)
             if self.sentence_embedding:

@@ -178,6 +178,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
         # try:
         stat = paired_stat
         for df in [unpaired_stat_full, unpaired_stat, all_stat, side_stat]:
+            df.index.name = 'id'
             stat = stat.merge(df, on='id', how='outer').sort_index()
             if 'id' in stat.columns:
                 stat = stat.set_index('id')
@@ -195,4 +196,52 @@ class FeatureExtractor(FeatureExtractorGeneral):
         if 'id' in stat.columns:
             stat = stat.set_index('id')
         stat = stat.sort_index()
+        return stat
+
+    @staticmethod
+    def extract_features_min(word_pairs_df: pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0, scaled=True):
+        print('features_min')
+        functions = ['mean', 'count',]
+        function_names = ['mean', 'count']
+        word_pairs_df = word_pairs_df.copy()
+        all_stat = word_pairs_df.groupby(['id'])['pred'].agg(functions)
+        all_stat.columns += '_all'
+
+        neg_mask = (word_pairs_df.pred < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
+                word_pairs_df.right_word == '[UNP]')
+        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+
+        if scaled:
+            com_df['pred'] = (com_df['pred'] - 0.5) * 2
+        paired_stat = com_df.groupby(['id'])['pred'].agg(functions)
+        paired_stat.columns += '_paired'
+
+        if scaled:
+            non_com_df['pred'] = non_com_df['pred'] * 2
+        non_com_df['comp_pred'] = (1 - non_com_df['pred']) if complementary else non_com_df['pred']
+
+
+        stat = (non_com_df.groupby(['id'])['comp_pred']).agg(functions)
+        unpaired_stat_full = stat
+        unpaired_stat_full = unpaired_stat_full.fillna(null_value)
+        unpaired_stat_full.columns += '_unpaired'
+
+
+        # try:
+        stat = paired_stat
+        for df in [unpaired_stat_full, all_stat]:
+            df.index.name = 'id'
+            stat = stat.merge(df, on='id', how='outer').sort_index()
+            if 'id' in stat.columns:
+                stat = stat.set_index('id')
+        # except Exception as e:
+        #     print(e)
+        #     for i, df in enumerate([paired_stat, unpaired_stat, unpaired_stat_full, all_stat, side_stat]):
+        #         print(i)
+        #         display(df)
+        # .merge(unpaired_stat, on='id', how='outer')
+
+        if 'id' in stat.columns:
+            stat = stat.set_index('id')
+        stat = stat.sort_index().fillna(null_value)
         return stat

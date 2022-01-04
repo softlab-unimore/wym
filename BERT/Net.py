@@ -80,13 +80,13 @@ class DatasetAccoppiate(Dataset):
 
 
 class NetAccoppiate(nn.Module):
-    def __init__(self, sentence_embedding=True):
+    def __init__(self, sentence_embedding=True, size=768):
         super().__init__()
         # self.fc1 = nn.Linear(300*2+len(common_words_df.attribute.unique()), 300)
         if sentence_embedding:
-            self.fc1 = nn.Linear(768 * 3, 300)
+            self.fc1 = nn.Linear(size * 3, 300)
         else:
-            self.fc1 = nn.Linear(768 * 2, 300)
+            self.fc1 = nn.Linear(size * 2, 300)
         self.fc2 = nn.Linear(300, 64)
         self.dp2 = nn.Dropout(p=0.5)
         self.fc3 = nn.Linear(64, 32)

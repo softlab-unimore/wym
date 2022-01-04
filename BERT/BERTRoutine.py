@@ -31,12 +31,14 @@ from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 
 from Evaluation import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
+from FeatureContribution import FeatureContribution
 from FeatureExtractor import FeatureExtractor
 from Finetune import finetune_BERT
 from Modelling import feature_importance
 from Net import DatasetAccoppiate, NetAccoppiate, train_model
 from WordEmbedding import WordEmbedding
-from WordPairGenerator import WordPairGenerator
+from WordPairGenerator import WordPairGenerator, WordPairGeneratorEdit
+
 
 class Routine():
     def __init__(self, dataset_name, dataset_path, project_path,
@@ -45,7 +47,7 @@ class Routine():
                  softlab_path='./content/drive/Shareddrives/SoftLab/',
                  verbose=True, we_finetuned=False,
                  we_finetune_path=None, num_epochs=10,
-                 sentence_embedding=True):
+                 sentence_embedding=True, we=None):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -65,6 +67,12 @@ class Routine():
         self.model_name = model_name
         self.feature_extractor = FeatureExtractor()
         self.verbose = verbose
+        self.sentence_embedding_dict = None
+        self.word_pair_model = None
+        self.word_pairing_kind = None
+
+        self.cos_sim = None
+        self.feature_kind = None
         if dataset_path is None:
             self.dataset_path = os.path.join(softlab_path, 'Dataset', 'Entity Matching', dataset_name)
         else:
@@ -82,7 +90,7 @@ class Routine():
             os.makedirs(os.path.join(self.model_files_path, 'results'))
         except:
             pass
-
+        self.experiments = {}
         sys.path.append(os.path.join(project_path, 'common_functions'))
         sys.path.append(os.path.join(project_path, 'src'))
         pd.options.display.max_colwidth = 130
@@ -129,8 +137,8 @@ class Routine():
                 self.table_A[col] = self.table_A[col].str.split().str.join(" ").str.lower()
                 self.table_B[col] = self.table_B[col].str.split().str.join(" ").str.lower()
 
-        self.table_A = self.table_A.replace('None', np.nan).replace('nan', np.nan)
-        self.table_B = self.table_B.replace('None', np.nan).replace('nan', np.nan)
+        self.table_A = self.table_A.replace('^None$', np.nan, regex=True).replace('^nan$', np.nan, regex=True)
+        self.table_B = self.table_B.replace('^None$', np.nan, regex=True).replace('^nan$', np.nan, regex=True)
 
         self.words_divided = {}
         tmp_path = os.path.join(self.model_files_path, 'words_maps.pickle')
@@ -165,24 +173,43 @@ class Routine():
         self.valid = self.valid_merged
         self.test = self.test_merged
         self.sentence_embedding = sentence_embedding
-        if we_finetuned:
+        if we is not None:
+            self.we = we
+        elif we_finetuned:
             if we_finetune_path is not None:
                 finetuned_path = we_finetune_path
             elif we_finetuned == 'SBERT':
-                    finetuned_path = finetune_BERT(self, num_epochs=num_epochs)
+                model_save_path = os.path.join(self.model_files_path, 'sBERT')
+                if reset_files or os.path.isdir(model_save_path) is False:
+                    finetuned_path = finetune_BERT(self, num_epochs=num_epochs, model_save_path=model_save_path)
+                else:
+                    finetuned_path = model_save_path
             else:
                 finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
+
             self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path,
                                     sentence_embedding=sentence_embedding)
         else:
             self.we = WordEmbedding(device=self.device, verbose=verbose, sentence_embedding=sentence_embedding)
 
-    def generate_df_embedding(self, chunk_size=500):
+    # def __del__(self):
+    #     try:
+    #         for value, key in self.embeddings.items():
+    #             value.cpu()
+    #     except:
+    #         pass
+    #     try:
+    #         self.we.mode.to('cpu')
+    #     except:
+    #         pass
+    #     gc.collect()
+    #     torch.cuda.empty_cache()
+    #     return super(Routine, self).__del__()
+
+    def generate_df_embedding(self, chunk_size=100):
         self.embeddings = {}
         if self.sentence_embedding:
             self.sentence_embedding_dict = {}
-        else:
-            self.sentence_embedding_dict = None
         self.words = {}
         try:
             assert self.reset_files == False, 'Reset_files'
@@ -230,6 +257,8 @@ class Routine():
         we = self.we
         res = {}
         for side in ['left', 'right']:
+            gc.collect()
+            torch.cuda.empty_cache()
             if verbose:
                 print(f'Embedding {side} side')
             prefix = self.lp if side == 'left' else self.rp
@@ -247,6 +276,7 @@ class Routine():
         return res
 
     def compute_word_pair(self, use_schema=True, **kwargs):
+        word_sim = self.word_pairing_kind == 'word_similarity'
         words_pairs_dict, emb_pairs_dict = {}, {}
         if self.sentence_embedding:
             self.sentence_emb_pairs_dict = {}
@@ -254,7 +284,7 @@ class Routine():
             assert self.reset_files == False, 'Reset_files'
             for df_name in ['train', 'valid', 'test']:
                 tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
-                words_pairs_dict[df_name] = pd.read_csv(tmp_path)
+                words_pairs_dict[df_name] = pd.read_csv(tmp_path, keep_default_na=False)
 
                 tmp_path = os.path.join(self.model_files_path, df_name + 'emb_pairs.csv')
                 with open(tmp_path, 'rb') as file:
@@ -268,39 +298,62 @@ class Routine():
         except Exception as e:
             print(e)
 
-            word_pair_generator = WordPairGenerator(self.words, self.embeddings, self.words_divided, df=self.test,
-                                                    use_schema=use_schema, device=self.device, verbose=self.verbose,
-                                                    sentence_embedding_dict=self.sentence_embedding_dict,
-                                                    **kwargs)
+            if word_sim:
+                word_pair_generator = WordPairGeneratorEdit(df=self.test, use_schema=use_schema, device=self.device,
+                                                            verbose=self.verbose,
+                                                            words_divided=self.words_divided,
+                                                            sentence_embedding_dict=self.sentence_embedding_dict,
+                                                            **kwargs)
+            else:
+                word_pair_generator = WordPairGenerator(self.words, self.embeddings, words_divided=self.words_divided,
+                                                        df=self.test,
+                                                        use_schema=use_schema, device=self.device, verbose=self.verbose,
+                                                        sentence_embedding_dict=self.sentence_embedding_dict,
+                                                        **kwargs)
             for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
-                if self.sentence_embedding:
-                    word_pairs, emb_pairs, sentence_emb_pairs = word_pair_generator.process_df(df)
-                    self.sentence_emb_pairs_dict[df_name] = sentence_emb_pairs
+                if word_sim:
+                    word_pairs = word_pair_generator.process_df(df)
                 else:
-                    word_pairs, emb_pairs = word_pair_generator.process_df(df)
-                tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
-                words_pairs_dict[df_name] = pd.DataFrame(word_pairs)
-                words_pairs_dict[df_name].to_csv(tmp_path, index=False)
-
-                tmp_path = os.path.join(self.model_files_path, df_name + 'emb_pairs.csv')
-                with open(tmp_path, 'wb') as file:
-                    pickle.dump(emb_pairs, file)
-                emb_pairs_dict[df_name] = emb_pairs
-                if self.sentence_embedding:
-                    tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
+                    if self.sentence_embedding:
+                        word_pairs, emb_pairs, sentence_emb_pairs = word_pair_generator.process_df(df)
+                        self.sentence_emb_pairs_dict[df_name] = sentence_emb_pairs
+                    else:
+                        word_pairs, emb_pairs = word_pair_generator.process_df(df)
+                    emb_pairs_dict[df_name] = emb_pairs
+                    tmp_path = os.path.join(self.model_files_path, df_name + 'word_pairs.csv')
+                    pd.DataFrame(word_pairs).to_csv(tmp_path, index=False)
+                    tmp_path = os.path.join(self.model_files_path, df_name + 'emb_pairs.csv')
                     with open(tmp_path, 'wb') as file:
-                        pickle.dump(self.sentence_emb_pairs_dict, file)
+                        pickle.dump(emb_pairs, file)
+                    if self.sentence_embedding:
+                        tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
+                        with open(tmp_path, 'wb') as file:
+                            pickle.dump(self.sentence_emb_pairs_dict, file)
+
+                words_pairs_dict[df_name] = pd.DataFrame(word_pairs)
 
         self.words_pairs_dict = words_pairs_dict
-        self.emb_pairs_dict = emb_pairs_dict
+        if not word_sim:
+            self.emb_pairs_dict = emb_pairs_dict
         if self.sentence_embedding:
             return self.words_pairs_dict, self.emb_pairs_dict, self.sentence_emb_pairs_dict
         else:
             return words_pairs_dict, emb_pairs_dict
 
-    def get_word_pairs(self, df, data_dict, use_schema=True, **kwargs):
-        wp = WordPairGenerator(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose,
-                               sentence_embedding_dict=self.sentence_embedding_dict, **kwargs)
+    def get_word_pairs(self, df, data_dict, use_schema=True,
+                       # parallel=False,
+                       **kwargs):
+        if self.word_pairing_kind is not None and self.word_pairing_kind == 'word_similarity':
+            wp = WordPairGeneratorEdit(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose,
+                                       sentence_embedding_dict=self.sentence_embedding_dict, **kwargs)
+            res = wp.get_word_pairs(df, data_dict)
+            return res
+        else:
+            wp = WordPairGenerator(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose,
+                                   sentence_embedding_dict=self.sentence_embedding_dict, **kwargs)
+        # if parallel:
+        #     res = wp.get_word_pairs_parallel(df, data_dict)
+        # else:
         res = wp.get_word_pairs(df, data_dict)
         if self.sentence_embedding:
             word_pairs, emb_pairs, sent_emb_pairs = res
@@ -333,7 +386,7 @@ class Routine():
                 valid_sententce_emb_pairs = None
         data_loader = DatasetAccoppiate(word_pairs, emb_pairs, sentence_embedding_pairs=sentence_emb_pairs)
         self.train_data_loader = data_loader
-        best_model = NetAccoppiate(sentence_embedding=self.sentence_embedding)
+        best_model = NetAccoppiate(sentence_embedding=self.sentence_embedding, )
         device = self.device
         tmp_path = os.path.join(self.model_files_path, 'net0.pickle')
         try:
@@ -379,34 +432,51 @@ class Routine():
                 sentence_emb_pairs = self.sentence_emb_pairs_dict[name]
             else:
                 sentence_emb_pairs = None
-            feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
-                                                     self.emb_pairs_dict[name], self.train_data_loader,
-                                                     sentence_emb_pairs=sentence_emb_pairs, **kwargs)
+            if self.word_pairing_kind == 'word_similarity':
+                feat, word_pairs = self.extract_features(None, self.words_pairs_dict[name],
+                                                         None, None,
+                                                         sentence_emb_pairs=sentence_emb_pairs, **kwargs)
+            else:
+                feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
+                                                         self.emb_pairs_dict[name], self.train_data_loader,
+                                                         sentence_emb_pairs=sentence_emb_pairs, **kwargs)
             features_dict[name] = feat
             words_pairs_dict[name] = word_pairs
         self.features_dict, self.words_pairs_dict = features_dict, words_pairs_dict
         return features_dict, words_pairs_dict
 
-    def extract_features(self, model, word_pairs, emb_pairs, train_data_loader, sentence_emb_pairs=None, **kwargs):
-        model.eval()
-        model.to(self.device)
-
-        data_loader = train_data_loader
-        # print(f'emb_pairs: {emb_pairs.shape}\nsent_pair: {sentence_emb_pairs.shape}') # TODO delete
-        data_loader.__init__(word_pairs, emb_pairs, sentence_emb_pairs)
-        word_pair_corrected = data_loader.word_pairs_corrected
-        word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
-        # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
-        features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
+    def extract_features(self, model: NetAccoppiate, word_pairs, emb_pairs, train_data_loader, sentence_emb_pairs=None,
+                         **kwargs):
+        if self.cos_sim is not None or self.word_pairing_kind == 'word_similarity':
+            if self.cos_sim == 'binary':
+                word_pair_corrected = word_pairs
+                word_pair_corrected['pred'] = np.where(word_pair_corrected['cos_sim'] > 0, 1, 0)
+            else:
+                word_pair_corrected = word_pairs
+                word_pair_corrected['pred'] = word_pair_corrected['cos_sim']
+        else:
+            model.eval()
+            model.to(self.device)
+            data_loader = train_data_loader
+            data_loader.__init__(word_pairs, emb_pairs, sentence_emb_pairs)
+            word_pair_corrected = data_loader.word_pairs_corrected
+            with torch.no_grad():
+                word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
+            # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
+        if self.feature_kind == 'min':
+            features = self.feature_extractor.extract_features_min(word_pair_corrected, **kwargs)
+        else:
+            features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
         return features, word_pair_corrected
 
-    def EM_modelling(self, *args, do_evaluation=True, do_feature_selection=False):
+    def EM_modelling(self, *args, do_evaluation=False, do_feature_selection=False, results_path='results'):
 
         if hasattr(self, 'models') == False:
             mmScaler = MinMaxScaler()
             mmScaler.clip = False
             self.models = [
-                ('LR', Pipeline([('mm', copy.copy(mmScaler)), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
+                ('LR',
+                 Pipeline([('mm', copy.copy(mmScaler)), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
                 ('LDA', Pipeline([('mm', copy.copy(mmScaler)), ('LDA', LinearDiscriminantAnalysis())])),
                 ('KNN', Pipeline([('mm', copy.copy(mmScaler)), ('KNN', KNeighborsClassifier())])),
                 ('CART', DecisionTreeClassifier(random_state=0)),
@@ -435,7 +505,11 @@ class Routine():
         print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
-        res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
+        try:
+            os.makedirs(os.path.join(self.model_files_path, results_path))
+        except:
+            pass
+        res_df.to_csv(os.path.join(self.model_files_path, results_path, 'performances.csv'))
         display(res_df)
         best_f1 = res_df[('test', 'f1')].max()
         best_features = self.features_dict['train'].columns
@@ -449,7 +523,8 @@ class Routine():
             print('running feature score')
             score_df = {'feature': [], 'score': []}
             X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
-            X_test, y_test = self.features_dict['valid'], self.valid.label.astype(int)
+            X_valid, y_valid = self.features_dict['valid'], self.valid.label.astype(int)
+            X_test, y_test = self.features_dict['test'], self.test.label.astype(int)
 
             cols = self.features_dict['train'].columns
             new_cols = cols
@@ -457,7 +532,7 @@ class Routine():
             iter = 0
             while different and iter <= 2:
                 cols = new_cols
-                score_df, res_df, new_cols = feature_importance(X_train, y_train, X_test, y_test, cols)
+                score_df, res_df, new_cols = feature_importance(X_train, y_train, X_valid, y_valid, cols)
                 different = len(cols) != len(new_cols)
                 iter += 1
 
@@ -465,14 +540,13 @@ class Routine():
             self.res_df = res_df
             selected_features = new_cols
 
-            X_train, y_train = self.features_dict['train'][selected_features], self.train.label.astype(int)
-            X_test, y_test = self.features_dict['test'][selected_features], self.test.label.astype(int)
-            res = {(x, y): [] for x in ['train', 'test'] for y in ['f1', 'precision', 'recall']}
+            res = {(x, y): [] for x in ['train','valid', 'test'] for y in ['f1', 'precision', 'recall']}
             print('Running models')
             for name, model in tqdm(self.models):
                 model.fit(X_train, y_train)
                 for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
                     res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
+                    res[('valid', score_name)].append(scorer(y_valid, model.predict(X_valid)))
                     res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
             self.models = self.models
             res_df = pd.DataFrame(res, index=model_names)
@@ -487,7 +561,7 @@ class Routine():
                     if x[0] == best_model_name:
                         best_model = x[1]
 
-                res_df.to_csv(os.path.join(self.model_files_path, 'results', 'performances.csv'))
+                res_df.to_csv(os.path.join(self.model_files_path, results_path, 'performances.csv'))
 
         X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
         best_model.fit(X_train, y_train)
@@ -497,7 +571,6 @@ class Routine():
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
 
-
         linear_model = Pipeline([('LR', LogisticRegression(max_iter=200, random_state=0))])
         # LogisticRegression(max_iter=200, random_state=0)
         X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
@@ -506,25 +579,34 @@ class Routine():
         tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
+        # save unit_contribution
+        # co = linear_model['LR'].coef_
+        # co_df = pd.DataFrame(co, columns=self.features_dict['valid'].columns).T
+        # for name in ['train','valid']
+        # turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, routine.cols)
+        # for x in co_df.index:
+        #     turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+        # data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
+        # word_relevance['token_contribution'] = data
 
         if do_evaluation:
             self.evaluation(self.valid_merged)
         return res_df
 
-    def get_match_score(self, features_df, lr=False):
+    def get_match_score(self, features_df, lr=False, reload=False):
 
         if lr is True:
             tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
         else:
             tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
-        with open(tmp_path, 'rb') as file:
-            model_data = pickle.load(file)
-        self.best_model_data = model_data
-        X = features_df[model_data['features']].to_numpy()
-        self.model = model_data['model']
+        if not hasattr(self, 'best_model_data') or reload:
+            with open(tmp_path, 'rb') as file:
+                model_data = pickle.load(file)
+            self.best_model_data = model_data
+        self.model = self.best_model_data['model']
+        X = features_df[self.best_model_data['features']].to_numpy()
         if isinstance(self.model, Pipeline) and isinstance(self.model[0], MinMaxScaler):
             self.model[0].clip = False
-
         return self.model.predict_proba(X)[:, 1]
 
     def plot_rf(self, rf, columns):
@@ -543,29 +625,44 @@ class Routine():
         self.reset_networks = False
         self.net_train()
 
-        def predictor(df_to_process, routine, return_data=False):  # m1
-            df_to_process = df_to_process.copy().reset_index(drop=True)
-            df_to_process['id'] = df_to_process.index
-            data_dict = routine.get_processed_data(df_to_process, chunk_size=400)
+        def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False):
+            df_to_process = df_to_process.copy()
+            if 'id' not in df_to_process.columns:
+                df_to_process = df_to_process.reset_index(drop=True)
+                df_to_process['id'] = df_to_process.index
+            gc.collect()
+            torch.cuda.empty_cache()
+            data_dict = routine.get_processed_data(df_to_process, chunk_size=chunk_size)
             res = routine.get_word_pairs(df_to_process, data_dict)
             features, word_relevance = routine.get_relevance_scores(*res)
-            if return_data:
-                return routine.get_match_score(features), data_dict, res, features, word_relevance
+
+            if lr:
+                match_score = routine.get_match_score(features, lr=lr, reload=reload)
             else:
-                return routine.get_match_score(features)
+                match_score = routine.get_match_score(features, reload=reload)
+            if return_data:
+                if lr:
+                    lr = routine.model['LR']
+                    co = lr.coef_
+                    co_df = pd.DataFrame(co, columns=routine.features_dict['test'].columns).T
+                    turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, routine.cols)
+                    for x in co_df.index:
+                        turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+                    data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
+                    word_relevance['token_contribution'] = data
+                return match_score, data_dict, res, features, word_relevance
+            else:
+                return match_score
 
         return partial(predictor, routine=self)
 
-    def evaluation(self, df, pred_threshold=0.00, plot=True, operations=[0,1,2]):
+    def evaluation(self, df: pd.DataFrame, pred_threshold=0.00, plot=True, operations=[0, 1, 2, 3], score_col='pred',
+                   chunk_size=400, reset=False):
         self.reset_networks = False
         self.net_train()
-        tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
-        with open(tmp_path, 'rb') as file:
-            model = pickle.load(file)
 
         predictor = self.get_predictor()
-
-
+        predictor = partial(predictor, chunk_size=chunk_size, lr=True)
         # pred = predictor(df)
         # tmp_df = df[(pred > 0.5)]
         # max_len = min(100, tmp_df.shape[0])
@@ -573,69 +670,148 @@ class Routine():
         # df_to_process['id'] = df_to_process.index
         # self.ev_df['match'] = df_to_process
         df = df.copy().replace(pd.NA, '')
-        data_dict = self.get_processed_data(df, chunk_size=400)
-        res = self.get_word_pairs(df, data_dict)
-        features, word_relevance = self.get_relevance_scores(*res)
-        pred = self.get_match_score(features)
+        if df.equals(self.valid_merged.replace(pd.NA, '')):
+            print('Evaluating valid dataset')
+            features = self.features_dict['valid']
+            word_relevance = self.words_pairs_dict['valid']
+            pred = self.get_match_score(features, lr=True, reload=True)
+            lr = self.model['LR']
+            co = lr.coef_
+            co_df = pd.DataFrame(co, columns=self.features_dict['test'].columns).T
+            turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, self.cols)
+            for x in co_df.index:
+                turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+            data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
+            word_relevance['token_contribution'] = data
+        else:
+            pred, data_dict, res, features, word_relevance = predictor(df, return_data=True, lr=True,
+                                                                       chunk_size=chunk_size, reload=True)
 
-
-        self.verbose = False
-        self.we.verbose = False
         self.ev_df = {}
 
-
-        match_df = df[(pred > 0.5)]
+        match_df = df[df['label'] > .5]
         sample_len = min(100, match_df.shape[0])
         match_ids = match_df.id.sample(sample_len).values
         self.ev_df['match'] = match_df[match_df.id.isin(match_ids)]
 
-        no_match_df = df[(pred < 0.5) & (pred >= pred_threshold)]
+        no_match_df = df[(df['label'] < 0.5) & (pred >= pred_threshold)]
         sample_len = min(100, no_match_df.shape[0])
         no_match_ids = no_match_df.id.sample(sample_len).values
         self.ev_df['nomatch'] = no_match_df[no_match_df.id.isin(no_match_ids)]
-
         if 0 in operations:
             # token_remotion_delta_performance
-            delta_performance = token_remotion_delta_performance(df, df.label.values.astype(int), word_relevance, predictor, plot=plot)
-            delta_performance.to_csv(
-                os.path.join(self.model_files_path, 'results', 'evaluation_token_remotion_delta_performance.csv'))
+            tmp_path = os.path.join(self.model_files_path, 'results',
+                                    f'{score_col}__evaluation_token_remotion_delta_performance.csv')
+            if reset is False and os.path.isfile(tmp_path):
+                delta_performance = pd.read_csv(tmp_path)
+            else:
+                delta_performance = token_remotion_delta_performance(df, df.label.values.astype(int), word_relevance,
+                                                                     predictor, plot=plot, score_col=score_col)
+                delta_performance.to_csv(
+                    tmp_path)
             display(delta_performance)
             self.delta_performance = delta_performance
 
         if 1 in operations:
-            # Evaluate impacts with words remotion
-            res_df = evaluate_df(word_relevance[word_relevance.id.isin(match_ids)], match_df[match_df.id.isin(match_ids)],
-                                 predictor)
+            self.verbose = False
+            self.we.verbose = False
+            if reset is False and os.path.isfile(
+                    os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_no_match_mean_delta.csv')):
+                pass
+            else:
+                # Evaluate impacts with words remotion
+                res_df = evaluate_df(word_relevance[word_relevance.id.isin(match_ids)],
+                                     match_df[match_df.id.isin(match_ids)],
+                                     predictor, score_col=score_col)
 
-            res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
-            match_stat = res_df.groupby('comb_name')[['concorde']].mean()
-            match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match.csv'))
-            display(match_stat)
-            res_df_match = res_df
-            match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(['size', 'mean', 'median', 'min', 'max'])
-            match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match_mean_delta.csv'))
+                res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
+                self.experiments['exp1_match'] = res_df
+                match_stat = res_df.groupby('comb_name')[['concorde']].mean()
+                match_stat.to_csv(os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_match.csv'))
+                display(match_stat)
+                res_df_match = res_df
+                match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(
+                    ['size', 'mean', 'median', 'min', 'max'])
+                match_stat.to_csv(
+                    os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_match_mean_delta.csv'))
 
-            res_df = evaluate_df(word_relevance[word_relevance.id.isin(no_match_ids)],
-                                 no_match_df[no_match_df.id.isin(no_match_ids)],
-                                 predictor)
-            res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
-            no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
-            no_match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match.csv'))
-            display(no_match_stat)
-            res_df_no_match = res_df
-            no_match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(['size', 'mean', 'median', 'min', 'max'])
-            no_match_stat.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match_mean_delta.csv'))
+                res_df = evaluate_df(word_relevance[word_relevance.id.isin(no_match_ids)],
+                                     no_match_df[no_match_df.id.isin(no_match_ids)],
+                                     predictor, score_col=score_col)
+                res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
+                self.experiments['exp1_no_match'] = res_df
+                no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
+                no_match_stat.to_csv(
+                    os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_no_match.csv'))
+                display(no_match_stat)
+                res_df_no_match = res_df
+                no_match_stat = res_df.groupby('comb_name')[['detected_delta']].agg(
+                    ['size', 'mean', 'median', 'min', 'max'])
+                no_match_stat.to_csv(
+                    os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_no_match_mean_delta.csv'))
 
-            res_df_match.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_match_combinations.csv'))
-            res_df_no_match.to_csv(os.path.join(self.model_files_path, 'results', 'evaluation_no_match_combinations.csv'))
-
+                res_df_match.to_csv(
+                    os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_match_combinations.csv'))
+                res_df_no_match.to_csv(
+                    os.path.join(self.model_files_path, 'results',
+                                 f'{score_col}__evaluation_no_match_combinations.csv'))
+            self.verbose = True
+            self.we.verbose = True
         if 2 in operations:
-            # Correlation between relevance and landmark impacts
-            correlation_data = correlation_vs_landmark(df, word_relevance, predictor, match_ids,
-                                                       no_match_ids)
-            correlation_data.to_csv(
-                os.path.join(self.model_files_path, 'results', 'evaluation_correlation_vs_landmark.csv'))
+            self.verbose = False
+            self.we.verbose = False
+            tmp_path = os.path.join(self.model_files_path, 'results',
+                                    f'{score_col}__evaluation_correlation_vs_landmark.csv')
+            if reset is False and os.path.isfile(tmp_path):
+                correlation_data = pd.read_csv(tmp_path)
+            else:
+
+                # Correlation between relevance and landmark impacts
+                correlation_data = correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_ids,
+                                                           score_col=score_col)
+                correlation_data.to_csv(tmp_path)
             display(correlation_data)
             self.correlation_data = correlation_data
+            self.verbose = True
+            self.we.verbose = True
+        if 3 in operations:
+            def cumsum_perc(df, n_perc_units=[1, 5, 10, 20, 30, 40, 50]):
+                x = df['token_contribution'].abs()
+                tot_sum = x.sum()
+                n_units = x.count()
+                cum_sum = x.sort_values(ascending=False).cumsum()
+                d = {}
+                for k in n_perc_units:
+                    d[int(k)] = cum_sum.iloc[np.ceil(k / 100 * n_units).astype(int) - 1] / tot_sum
+                return pd.Series(d, index=d.keys())
 
-        return None#res_df_match, res_df_no_match, delta_performance, correlation_data
+            n_perc_units = np.concatenate([[1, 3, 5], np.linspace(10, 100, 10)])
+            tmp = word_relevance.groupby(
+                ['id', np.where(word_relevance['token_contribution'] > 0, 'Positive', 'Negative')]).apply(
+                partial(cumsum_perc, n_perc_units=n_perc_units))
+            to_plot = tmp.groupby(tmp.index.get_level_values(1)).mean()
+            to_plot.loc[:, 0] = 0
+            to_plot = to_plot.T.sort_index()
+            self.coinciveness = to_plot
+
+            tmp = word_relevance.groupby('id').apply(partial(cumsum_perc, n_perc_units=n_perc_units))
+            to_plot = tmp.mean()
+            to_plot.loc[0] = 0
+            to_plot = to_plot.T.sort_index()
+            self.coinciveness['total'] = to_plot
+            to_plot = self.coinciveness
+            tmp_path = os.path.join(self.model_files_path, 'results', f'{score_col}__pareto-relation.csv')
+            self.coinciveness.to_csv(tmp_path)
+
+            import seaborn as sns;
+            sns.set()  # for plot styling
+            sns.set(rc={"figure.dpi": 100, 'savefig.dpi': 300})
+            sns.set_context('notebook')
+            sns.set_style('whitegrid')
+            to_plot.plot()
+            plt.ylim(0, 1)
+            plt.xticks(to_plot.index, to_plot.index);
+            plt.xlim(to_plot.index[0] / 2, to_plot.index[-1])
+            plt.tight_layout()
+
+        return word_relevance  # res_df_match, res_df_no_match, delta_performance, correlation_data

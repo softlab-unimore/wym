@@ -1,12 +1,15 @@
-from sklearn.metrics import f1_score, precision_score, recall_score
-from sklearn.metrics import roc_auc_score
-import plotly.express as px
-from sklearn.metrics import roc_curve, auc
+import gc, torch
+import re
+from functools import partial
+
 import numpy as np
 import pandas as pd
-from tqdm.notebook import tqdm
-import re
+import plotly.express as px
 from lime.lime_text import LimeTextExplainer
+from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve, auc
+from tqdm.notebook import tqdm
 
 
 def get_prefix(word_relevance_df, el, side: str):
@@ -58,12 +61,17 @@ def append_prefix(word_relevance, df):
     return pd.concat(res_df)
 
 
-def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', 'left_id', 'right_id', 'label']):
+def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', 'left_id', 'right_id', 'label'],
+                score_col='pred'):
+    print(f'Testing unit remotion with -- {score_col}')
     assert df_to_process.shape[
                0] > 0, f'DataFrame to evaluate must have some elements. Passed df has shape {df_to_process.shape[0]}'
     evaluation_df = df_to_process.copy().replace(pd.NA, '')
     word_relevance_prefix = append_prefix(word_relevance, evaluation_df)
-    word_relevance_prefix['impact'] = word_relevance_prefix['pred'] - 0.5
+    if score_col == 'pred':
+        word_relevance_prefix['impact'] = word_relevance_prefix[score_col] - 0.5
+    else:
+        word_relevance_prefix['impact'] = word_relevance_prefix[score_col]
     word_relevance_prefix['conf'] = 'bert'
 
     res_list = []
@@ -76,13 +84,14 @@ def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', '
                                   exclude_attrs=exclude_attrs, percentage=.25, num_round=3)
 
         fixed_side = 'right' if side == 'left' else 'left'
-        res_df = ev.evaluate_set(df_to_process.id.values, 'bert', variable_side=side, fixed_side=fixed_side, utility=True)
+        res_df = ev.evaluate_set(df_to_process.id.values, 'bert', variable_side=side, fixed_side=fixed_side,
+                                 utility=True)
         res_list.append(res_df.copy())
 
     return pd.concat(res_list)
 
 
-def correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_ids, num_samples=250):
+def correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_ids, score_col='pred', num_samples=250):
     """
     test code
     from Evaluation import correlation_vs_landmark
@@ -93,6 +102,7 @@ def correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_i
     correlation_data = correlation_vs_landmark(df, word_relevance, predictor, match_ids,
                                                                        no_match_ids)
     """
+    print(f'Testing Landmark correlation with -- {score_col}')
     explainer = Landmark(predictor, df, exclude_attrs=['id', 'label'], lprefix='left_', rprefix='right_')
     res_list_of_dict = []
     for match_code, id_samples in zip(['match', 'nomatch'], [match_ids, no_match_ids]):
@@ -113,8 +123,8 @@ def correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_i
                 landmark_impacts[side + '_word'] = landmark_impacts['word']
                 landmark_impacts = landmark_impacts[[side + '_word', side + '_attribute', 'impact']]
                 words_relevance_tmp = word_relevance_sample.query(side + '_attribute != "[UNP]"')[
-                    [side + '_word', side + '_attribute', 'id', 'pred']]
-                words_relevance_tmp['relevance'] = words_relevance_tmp['pred']
+                    [side + '_word', side + '_attribute', 'id', score_col]]
+                words_relevance_tmp['relevance'] = words_relevance_tmp[score_col]
                 # display(words_relevance_tmp, landmark_impacts)
                 impacts_comparison = words_relevance_tmp.merge(landmark_impacts,
                                                                on=[side + '_attribute', side + '_word'])
@@ -126,16 +136,16 @@ def correlation_vs_landmark(df, word_relevance, predictor, match_ids, no_match_i
     return pd.DataFrame(res_list_of_dict)
 
 
-def generate_altered_df(df, y_true, word_relevance_df, token_remotion_fn):
+def generate_altered_df(df, y_true, word_relevance_df, tokens_to_remove):
     new_df = df.copy()
     for i in tqdm(range(df.shape[0])):
         el = new_df.iloc[[i]]
         id = el['id'].values[0]
-        wr_el = word_relevance_df.query(f'id == {id}')
-
-        tokens_to_remove = token_remotion_fn(wr_el)
+        turn_tokens_to_remove = tokens_to_remove.query(f'id == {id}')
+        # wr_el = word_relevance_df.query(f'id == {id}')
+        # tokens_to_remove = token_remotion_fn(wr_el)
         for side in ['left', 'right']:
-            tokens_to_remove_side = tokens_to_remove[[side + '_word', side + '_attribute']].values
+            tokens_to_remove_side = turn_tokens_to_remove[[side + '_word', side + '_attribute']].values
             for word, attr in tokens_to_remove_side:
                 if word != '[UNP]':
                     try:
@@ -157,7 +167,7 @@ def generate_altered_df(df, y_true, word_relevance_df, token_remotion_fn):
 def process_roc_auc(y_true, y_pred, plot=True):
     # display(df.iloc[[10]], new_df.iloc[[10]])
     if plot:
-        fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+        fpr, tpr, thresholds = roc_curve(y_true.astype(int), y_pred)
 
         fig = px.area(
             x=fpr, y=tpr,
@@ -173,42 +183,80 @@ def process_roc_auc(y_true, y_pred, plot=True):
         fig.update_yaxes(scaleanchor="x", scaleratio=1)
         fig.update_xaxes(constrain='domain')
         fig.show()
-    auc_score = roc_auc_score(y_true, y_pred)
+    auc_score = roc_auc_score(y_true.astype(int), y_pred)
     return auc_score
 
 
-def token_remotion_delta_performance(df, y_true, word_relevance, predictor, k_list=[10, 3, 5, 1], plot=True):
-    useful = lambda x: x[(x['pred'] >.5) == (x.label.values[0] == 1)].sort_values('pred', ascending=(x.label.values[0] == 0))
-    # ascending (low is useful) for nomatch
+def token_remotion_delta_performance(df, y_true, word_relevance, predictor, k_list=[10, 5, 3, 1], plot=True,
+                                     score_col='pred'):
+    print(f'Testing {score_col}!')
+    tokens_dict = {}
+    if score_col == 'pred':
+        th = 0.5
+    else:
+        th = 0
 
-    useless = lambda x: x[(x['pred'] <.5) == (x.label.values[0] == 1)].sort_values('pred', ascending=(x.label.values[0] == 1))
+    x = word_relevance.copy()
+    x['tmp_score'] = x[score_col] * np.where(x.label.values == 1, 1, -1)
+    tokens_dict['del_useful'] = x[(x[score_col] >= th) == (x.label.values == 1)].sort_values('tmp_score',
+                                                                                             ascending=False).groupby(
+        'id').head
+    # .sort_values(score_col, ascending=(x.label.values[0] == 0))
+    tokens_dict['del_useless'] = x[(x[score_col] < th) == (x.label.values == 1)].sort_values('tmp_score',
+                                                                                             ascending=True).groupby(
+        'id').head
+    tokens_dict['del_random'] = partial(x.groupby('id').sample, random_state=0)
+    # ascending (low is useful) for nomatch
+    # .sort_values(score_col, ascending=(x.label.values[0] == 1))
     # ascending (low is useless (NOT useful)) for match
-    random = lambda x: x.sample(x.shape[0])
 
     res_list = []
     tmp_dict = {}
-    pred_dict = {}
+
     print('Evaluating delta performance on full dataset with token remotion.')
-    for k in tqdm(k_list):
+    for k in k_list:
         tmp_dict.update(n_tokens=k)
-        for fn, fn_name in zip([useful, useless, random], ['del_useful', 'del_useless', 'del_random']):
-            tmp_dict['function'] = fn_name
-            final_fn = lambda x: fn(x).head(k)
-            code = fn_name + '_' + str(k)
+        df_dict = {}
+        gc.collect()
+        torch.cuda.empty_cache()
+        for fn_name in ['del_random', 'del_useful', 'del_useless']:
+            code = f'{fn_name}-{k}'
             print(code)
-            altered_df = generate_altered_df(df, y_true, word_relevance, final_fn)
-            new_pred = predictor(altered_df)
-            auc_score = process_roc_auc(y_true, new_pred, plot)
+            if fn_name != 'del_random':
+                tokens_to_remove = tokens_dict[fn_name](k)
+                turn_df = df
+                turn_word_relevance = word_relevance
+            else:
+                sample_mask = x.groupby('id')[score_col].count() >= k
+                turn_df = df.sort_values('id')[sample_mask]
+                turn_word_relevance = word_relevance[word_relevance.id.isin(turn_df['id'].values)]
+                tokens_to_remove = turn_word_relevance.groupby('id').sample(k, random_state=0)
+            altered_df = generate_altered_df(turn_df, turn_df.label.values.astype(int), turn_word_relevance, tokens_to_remove=tokens_to_remove)
+            df_dict[code] = altered_df
+
+        pred_dict = {}
+        all_df = pd.concat([value for key, value in df_dict.items()])
+        all_df['id'] = np.arange(all_df.shape[0])
+        print('Predicting')
+        all_pred = predictor(all_df)
+        start = 0
+        for key, value in df_dict.items():
+            stop = value.shape[0] + start
+            pred_dict[key] = all_pred[start:stop]
+            start = stop
+        for fn_name in ['del_random', 'del_useful', 'del_useless']:
+            tmp_dict['function'] = fn_name
+            code = f'{fn_name}-{k}'
+            new_pred = pred_dict[code]
+            print(code)
+            turn_y_true = df_dict[code].label.values.astype(int)
+            auc_score = process_roc_auc(turn_y_true, new_pred, plot)
             tmp_dict['auc_score'] = auc_score
             for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-                tmp_dict[score_name] = scorer(y_true, new_pred > .5)
-
+                tmp_dict[score_name] = scorer(turn_y_true, new_pred > .5)
             res_list.append(tmp_dict.copy())
-
             pred_dict[code] = new_pred
     return pd.DataFrame(res_list)
-
-
 
 
 class Landmark(object):
