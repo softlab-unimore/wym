@@ -187,7 +187,8 @@ def train_model(model, dataloaders, criterion, optimizer, selection_loss, num_ep
                     outputs = model(inputs)
                     try:
                         loss = criterion(outputs, labels)
-                    except:
+                    except Exception as e:
+                        print(e)
                         import pdb
                         pdb.set_trace()
 

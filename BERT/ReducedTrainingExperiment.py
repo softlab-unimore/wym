@@ -47,7 +47,8 @@ def do_reduced_training_experiment(routine, n_repetition=3, train_size_list=[500
                 print(e)
             try:
                 os.makedirs(os.path.join(turn_path, 'results'))
-            except:
+            except Exception as e:
+                print(e)
                 pass
             turn_df.to_csv(os.path.join(turn_path, 'train_merged.csv'), index=False)
             for name, df in [('tableA.csv', routine.table_A),

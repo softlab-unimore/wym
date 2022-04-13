@@ -2,11 +2,13 @@ import copy
 import gc
 import os
 import pickle
+import string
 import sys
 from functools import partial
 from warnings import simplefilter
 
 import matplotlib.pyplot as plt
+import nltk
 import numpy as np
 import pandas as pd
 import torch
@@ -84,11 +86,13 @@ class Routine:
             self.model_files_path = model_files_path
         try:
             os.makedirs(self.model_files_path)
-        except:
+        except Exception as e:
+            print(e)
             pass
         try:
             os.makedirs(os.path.join(self.model_files_path, 'results'))
-        except:
+        except Exception as e:
+            print(e)
             pass
         self.experiments = {}
         sys.path.append(os.path.join(project_path, 'common_functions'))
@@ -101,6 +105,33 @@ class Routine:
             self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv')).drop(col_to_drop, 1)
         if not hasattr(self, 'table_B'):
             self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv')).drop(col_to_drop, 1)
+
+
+        if dataset_name == 'BeerAdvo-RateBeer':
+            table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv'))
+            table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv'))
+            for col in table_A.columns:
+                if table_A.dtypes[col] == object:
+                    for c, to_replace in [(' _ ™ ', '\''), ('äº _', '\xE4\xBA\xAC'),
+                                          ('_ œ', ''), (' _', ''),
+                                          ('Ã ', 'Ã'), ('»', ''), ('$', '¤'), (' _ ™ ', '\''),
+                                          ('1/2', '½'), ('1/4', '¼'), ('3/4', '¾'),
+                                          ('Ãa', '\xC3\xADa'), ('Ä `` ', '\xC4\xAB'), (r'Ã$', '\xC3\xADa'),
+                                          ('\. \.', '\.'),
+                                          ('Å ¡', '\xC5\xA1'),
+                                          ('Ã\'\' ', '\xC3\xBB'), ('_', '\xC3\x80'), ('Ã œ', ''),
+                                          ('Ã ¶ ', '\xC3\xB6'), ('Ã»¶ ', '\xC3\xB6'),
+                                          (' \.', ''), ('&#40; ', ''), (' \&\#41; ', ''),
+                                          ]:
+                        table_A[col] = table_A[col].str.replace(c, to_replace)
+                        table_B[col] = table_B[col].str.replace(c, to_replace)
+                    pat = r"(?P<one>Ã)(?P<two>. )"
+                    repl = lambda m: f'Ã{m.group("two")[0]}'
+                    table_A[col] = table_A[col].str.replace(pat, repl)
+            table_A['Brew_Factory_Name'] = table_A['Brew_Factory_Name'].str.encode('latin-1').str.decode('utf-8')
+            self.table_A = table_A
+            self.table_B = table_B
+
 
         left_ids = []
         right_ids = []
@@ -120,7 +151,6 @@ class Routine:
                           "*", "+", ",", "-", "/", ":", ";", "<",
                           "=", ">", "?", "@", "[", "\\", "]", "^", "_",
                           "`", "{", "|", "}", "~", "–", "´"]
-
             for col in np.setdiff1d(self.table_A.columns, ['id']):
                 self.table_A[col] = self.table_A[col].astype(str). \
                                         str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode(
@@ -139,6 +169,7 @@ class Routine:
 
         self.table_A = self.table_A.replace('^None$', np.nan, regex=True).replace('^nan$', np.nan, regex=True)
         self.table_B = self.table_B.replace('^None$', np.nan, regex=True).replace('^nan$', np.nan, regex=True)
+
 
         self.words_divided = {}
         tmp_path = os.path.join(self.model_files_path, 'words_maps.pickle')
@@ -196,11 +227,13 @@ class Routine:
     #     try:
     #         for value, key in self.embeddings.items():
     #             value.cpu()
-    #     except:
+    #     except Exception as e:
+    #           print(e)
     #         pass
     #     try:
     #         self.we.mode.to('cpu')
-    #     except:
+    #     except Exception as e:
+    #           print(e)
     #         pass
     #     gc.collect()
     #     torch.cuda.empty_cache()
@@ -354,12 +387,11 @@ class Routine:
         # if parallel:
         #     res = wp.get_word_pairs_parallel(df, data_dict)
         # else:
-        res = wp.get_word_pairs(df, data_dict)
+        res = wp.get_word_pairs(df, data_dict)  # empty lost
         if self.sentence_embedding:
             word_pairs, emb_pairs, sent_emb_pairs = res
         else:
             word_pairs, emb_pairs = res
-
         word_pairs = pd.DataFrame(word_pairs)
         if self.sentence_embedding:
             return word_pairs, emb_pairs, sent_emb_pairs
@@ -462,6 +494,7 @@ class Routine:
             word_pair_corrected = data_loader.word_pairs_corrected
             with torch.no_grad():
                 word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
+
             # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
         if self.feature_kind == 'min':
             features = self.feature_extractor.extract_features_min(word_pair_corrected, **kwargs)
@@ -496,18 +529,22 @@ class Routine:
         X_test, y_test = self.features_dict['test'].to_numpy(), self.test.label.astype(int)
 
         res = {(x, y): [] for x in ['train', 'valid', 'test'] for y in ['f1', 'precision', 'recall']}
+        df_pred = {}
         for name, model in tqdm(self.models):
             model.fit(X_train, y_train)
-            for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-                res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
-                res[('valid', score_name)].append(scorer(y_valid, model.predict(X_valid)))
-                res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
+            for turn_name, turn_df, turn_y in zip(['train', 'valid', 'test'], [X_train, X_valid, X_test],
+                                                  [y_train, y_valid, y_test]):
+                df_pred[turn_name] = model.predict(turn_df)
+                for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
+                    res[(turn_name, score_name)].append(scorer(turn_y, df_pred[turn_name]))
+
         print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
         try:
             os.makedirs(os.path.join(self.model_files_path, results_path))
-        except:
+        except Exception as e:
+            print(e)
             pass
         res_df.to_csv(os.path.join(self.model_files_path, results_path, 'performances.csv'))
         display(res_df)
@@ -540,14 +577,16 @@ class Routine:
             self.res_df = res_df
             selected_features = new_cols
 
-            res = {(x, y): [] for x in ['train','valid', 'test'] for y in ['f1', 'precision', 'recall']}
+            res = {(x, y): [] for x in ['train', 'valid', 'test'] for y in ['f1', 'precision', 'recall']}
             print('Running models')
             for name, model in tqdm(self.models):
                 model.fit(X_train, y_train)
-                for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-                    res[('train', score_name)].append(scorer(y_train, model.predict(X_train)))
-                    res[('valid', score_name)].append(scorer(y_valid, model.predict(X_valid)))
-                    res[('test', score_name)].append(scorer(y_test, model.predict(X_test)))
+                for turn_name, turn_df, turn_y in zip(['train', 'valid', 'test'], [X_train, X_valid, X_test],
+                                                      [y_train, y_valid, y_test]):
+                    df_pred[turn_name] = model.predict(turn_df)
+                    for score_name, scorer in [['f1', f1_score], ['precision', precision_score],
+                                               ['recall', recall_score]]:
+                        res[(turn_name, score_name)].append(scorer(turn_y, df_pred[turn_name]))
             self.models = self.models
             res_df = pd.DataFrame(res, index=model_names)
             res_df.index.name = 'model_name'
@@ -626,6 +665,7 @@ class Routine:
         self.net_train()
 
         def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False):
+
             df_to_process = df_to_process.copy()
             if 'id' not in df_to_process.columns:
                 df_to_process = df_to_process.reset_index(drop=True)
@@ -640,6 +680,10 @@ class Routine:
                 match_score = routine.get_match_score(features, lr=lr, reload=reload)
             else:
                 match_score = routine.get_match_score(features, reload=reload)
+            match_score_series = pd.Series(0.5, index=df_to_process.id)
+            match_score_series[features.index] = match_score
+            match_score = match_score_series.values
+
             if return_data:
                 if lr:
                     lr = routine.model['LR']
@@ -655,6 +699,20 @@ class Routine:
                 return match_score
 
         return partial(predictor, routine=self)
+
+    def get_calculated_data(self, df_name):
+        features = self.features_dict[df_name]
+        word_relevance = self.words_pairs_dict[df_name]
+        pred = self.get_match_score(features, lr=True, reload=True)
+        lr = self.model['LR']
+        co = lr.coef_
+        co_df = pd.DataFrame(co, columns=self.features_dict[df_name].columns).T
+        turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, self.cols)
+        for x in co_df.index:
+            turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+        data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
+        word_relevance['token_contribution'] = data
+        return pred, features, word_relevance
 
     def evaluation(self, df: pd.DataFrame, pred_threshold=0.00, plot=True, operations=[0, 1, 2, 3], score_col='pred',
                    chunk_size=400, reset=False):
@@ -672,17 +730,8 @@ class Routine:
         df = df.copy().replace(pd.NA, '')
         if df.equals(self.valid_merged.replace(pd.NA, '')):
             print('Evaluating valid dataset')
-            features = self.features_dict['valid']
-            word_relevance = self.words_pairs_dict['valid']
-            pred = self.get_match_score(features, lr=True, reload=True)
-            lr = self.model['LR']
-            co = lr.coef_
-            co_df = pd.DataFrame(co, columns=self.features_dict['test'].columns).T
-            turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, self.cols)
-            for x in co_df.index:
-                turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
-            data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
-            word_relevance['token_contribution'] = data
+            df_name = 'valid'
+            pred, features, word_relevance = self.get_calculated_data(df_name)
         else:
             pred, data_dict, res, features, word_relevance = predictor(df, return_data=True, lr=True,
                                                                        chunk_size=chunk_size, reload=True)
@@ -813,5 +862,8 @@ class Routine:
             plt.xticks(to_plot.index, to_plot.index);
             plt.xlim(to_plot.index[0] / 2, to_plot.index[-1])
             plt.tight_layout()
+        if 4 in operations:  # AOPC
+
+            pass
 
         return word_relevance  # res_df_match, res_df_no_match, delta_performance, correlation_data

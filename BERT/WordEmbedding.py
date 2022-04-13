@@ -132,11 +132,13 @@ class WordEmbedding():
         df = df.replace('None', np.nan).replace('nan', np.nan)
         sentences = df[columns].apply(WordEmbedding.get_words_to_embed, 1)
         not_None_sentences = [x for x in sentences if x is not None]
+        # display(not_None_sentences)
         if len(not_None_sentences) > 0:
             if self.sentence_embedding:
                 tmp_emb_all, tmp_words, tmp_sentences = self.get_word_embeddings(not_None_sentences)
             else:
                 tmp_emb_all, tmp_words = self.get_word_embeddings(not_None_sentences)
+        # display(tmp_words)
         emb_all, words, sentences_emb = [], [], []
         index = 0
         for i in sentences:
@@ -158,6 +160,7 @@ class WordEmbedding():
             last_index = word_list.index('[SEP]')
             words_cutted.append(word_list[:last_index])
             emb_cutted.append(emb_all[i][:last_index].cpu())
+            # assert len(word_list[:last_index])> 0
         emb_all = np.array(emb_cutted, dtype=object)
 
         if self.sentence_embedding:
@@ -169,7 +172,6 @@ class WordEmbedding():
     def generate_embedding(self, df, chunk_size=500):
         emb_list, words_list, sent_emb_list = [], [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
-
         torch.cuda.empty_cache()
         if self.verbose:
             print('Computing embedding')
