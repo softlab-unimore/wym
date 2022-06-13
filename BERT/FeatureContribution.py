@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from FeatureExtractor import FeatureExtractorGeneral
+
 
 def get_median_index(d):
     ranks = d.rank(pct=True)
@@ -66,7 +68,7 @@ class FeatureContributionGeneral:
 
     @staticmethod
     def compute_derived_features(df: pd.DataFrame, feature_names, possible_unpaired=['_exclusive', '', '_both'],
-                                 null_value=0, rs_col='pred'):
+                                 null_value=0, rs_col='pred', additive_only=False):
         base_index_series = pd.Series(0, df.id.unique())
 
         for turn_suffix in possible_unpaired:
@@ -74,46 +76,47 @@ class FeatureContributionGeneral:
                 matched_col, unmatched_col = feature + '_paired', feature + '_unpaired' + turn_suffix
                 matched_mask = df[matched_col] != 0
                 unmatched_mask = df[unmatched_col] != 0
+                if additive_only is False:
+                    operator = '_diff'
+                    new_col = feature + operator + turn_suffix
+                    if feature in ['sum', 'mean', 'count', 'median', 'max', 'min', 'M-m']:
+                        df.loc[matched_mask, new_col] = df.loc[matched_mask, matched_col]
+                        df.loc[unmatched_mask, new_col] = -1 * df.loc[unmatched_mask, unmatched_col]
+                if additive_only is False:
+                    operator = '_perc'
+                    new_col = feature + operator + turn_suffix
+                    if feature in ['sum', 'mean', 'count', 'median', 'max', 'min', 'M-m']:
+                        A_grouped = df[matched_mask].groupby('id')[matched_col].agg('sum').replace(0, np.nan)
+                        A = A_grouped.combine_first(base_index_series).to_numpy()
+                        B_grouped = df[unmatched_mask].groupby('id')[unmatched_col].agg('sum').replace(0, np.nan)
+                        B = B_grouped.combine_first(base_index_series).to_numpy()
+                        matched_impact = (A * A + A * B + B * B + 1e-9) / ((A + B) * (A + B) + 1e-9)
+                        unmatched_impact = (B * B + 1e-9) / ((A + B) * (A + B) + 1e-9)
+                        matched_impact[(unmatched_impact == 1)] = 0
+                        unmatched_impact[(unmatched_impact == 1)] = 0
 
-                operator = '_diff'
-                new_col = feature + operator + turn_suffix
-                if feature in ['sum', 'mean', 'count', 'median', 'max', 'min', 'M-m']:
-                    df.loc[matched_mask, new_col] = df.loc[matched_mask, matched_col]
-                    df.loc[unmatched_mask, new_col] = -1 * df.loc[unmatched_mask, unmatched_col]
-                operator = '_perc'
-                new_col = feature + operator + turn_suffix
-                if feature in ['sum', 'mean', 'count', 'median', 'max', 'min', 'M-m']:
-                    A_grouped = df[matched_mask].groupby('id')[matched_col].agg('sum').replace(0, np.nan)
-                    A = A_grouped.combine_first(base_index_series).to_numpy()
-                    B_grouped = df[unmatched_mask].groupby('id')[unmatched_col].agg('sum').replace(0, np.nan)
-                    B = B_grouped.combine_first(base_index_series).to_numpy()
-                    matched_impact = (A * A + A * B + B * B + 1e-9) / ((A + B) * (A + B) + 1e-9)
-                    unmatched_impact = (B * B + 1e-9) / ((A + B) * (A + B) + 1e-9)
-                    matched_impact[(unmatched_impact == 1)] = 0
-                    unmatched_impact[(unmatched_impact == 1)] = 0
+                        base_contributions = (df[matched_col] - df[unmatched_col])
+                        pos_mask = base_contributions > 0
+                        neg_mask = base_contributions < 0
+                        if (pos_mask != matched_mask).all():
+                            matched_sum = A
+                            unmatched_sum = B
+                        else:  # spread pos impact only on pos impact decision unit
+                            matched_sum = base_contributions[pos_mask].groupby(df.loc[pos_mask, 'id']).agg(
+                                'sum').combine_first(
+                                base_index_series).to_numpy()
+                            unmatched_sum = -1 * base_contributions[neg_mask].groupby(df.loc[neg_mask, 'id']).agg(
+                                'sum').combine_first(
+                                base_index_series).to_numpy()
+                        matched_factor = pd.Series(matched_impact / matched_sum, index=base_index_series.index).fillna(0)
+                        unmatched_factor = pd.Series(unmatched_impact / unmatched_sum,
+                                                     index=base_index_series.index).fillna(0)
+                        # assert unmatched_impact[58] !=0
 
-                    base_contributions = (df[matched_col] - df[unmatched_col])
-                    pos_mask = base_contributions > 0
-                    neg_mask = base_contributions < 0
-                    if (pos_mask != matched_mask).all():
-                        matched_sum = A
-                        unmatched_sum = B
-                    else:  # spread pos impact only on pos impact decision unit
-                        matched_sum = base_contributions[pos_mask].groupby(df.loc[pos_mask, 'id']).agg(
-                            'sum').combine_first(
-                            base_index_series).to_numpy()
-                        unmatched_sum = -1 * base_contributions[neg_mask].groupby(df.loc[neg_mask, 'id']).agg(
-                            'sum').combine_first(
-                            base_index_series).to_numpy()
-                    matched_factor = pd.Series(matched_impact / matched_sum, index=base_index_series.index).fillna(0)
-                    unmatched_factor = pd.Series(unmatched_impact / unmatched_sum,
-                                                 index=base_index_series.index).fillna(0)
-                    # assert unmatched_impact[58] !=0
-
-                    df.loc[pos_mask, new_col] = base_contributions[pos_mask].values * matched_factor.loc[
-                        df[pos_mask].id.values].values
-                    df.loc[neg_mask, new_col] = base_contributions[neg_mask].values * unmatched_factor.loc[
-                        df[neg_mask].id.values].values
+                        df.loc[pos_mask, new_col] = base_contributions[pos_mask].values * matched_factor.loc[
+                            df[pos_mask].id.values].values
+                        df.loc[neg_mask, new_col] = base_contributions[neg_mask].values * unmatched_factor.loc[
+                            df[neg_mask].id.values].values
 
         return df.fillna(0)
 
@@ -122,7 +125,7 @@ class FeatureContribution(FeatureContributionGeneral):
 
     @staticmethod
     def extract_features_by_attr(word_pairs_df: pd.DataFrame, attributes, complementary=True, pos_threshold=.5,
-                                 null_value=0):
+                                 null_value=0, additive_only=False):
         stat_list = []
         contribution_df = word_pairs_df[['id', 'left_word', 'right_word', 'cos_sim', 'left_attribute',
                                          'right_attribute', 'label', 'pred']]
@@ -132,12 +135,13 @@ class FeatureContribution(FeatureContributionGeneral):
             for attr in attributes:
                 tmp_pairs = word_pairs_df.query(f'{side}_attribute == "{attr}"')
                 tmp_stat = FeatureContribution.extract_features_simplified(tmp_pairs, complementary, pos_threshold,
-                                                                           null_value)
+                                                                           null_value, additive_only=additive_only)
                 tmp_stat.columns = tmp_stat.columns + f'_{side}_{attr}'
                 stat_list.append(tmp_stat)
                 # display(tmp_stat)
         # plus overlall features
-        tmp_stat = FeatureContribution.extract_features(word_pairs_df, complementary, pos_threshold, null_value)
+        tmp_stat = FeatureContribution.extract_features(word_pairs_df, complementary, pos_threshold, null_value,
+                                                        additive_only=additive_only)
         tmp_stat.columns = tmp_stat.columns + f'_allattr'
         stat_list.append(tmp_stat)
 
@@ -172,38 +176,56 @@ class FeatureContribution(FeatureContributionGeneral):
                 df['M-m' + pair_suffix] = df['max' + pair_suffix] - df['min' + pair_suffix]
 
     @staticmethod
+    def get_contrib_functions(additive_only=False):
+        if additive_only:
+            functions, function_names = FeatureExtractorGeneral.functions_dict['additive']
+        else:
+            functions, function_names = FeatureExtractorGeneral.functions_dict['all']
+        contrib_functions = []
+        if 'sum' in function_names or 'mean' in function_names or 'count' in function_names:
+            contrib_functions.append('count')
+        if 'max' in function_names or 'M-m' in function_names:
+            contrib_functions.append('idxmax')
+        if 'min' in function_names or 'M-m' in function_names:
+            contrib_functions.append('idxmin')
+        if 'median' in function_names:
+            contrib_functions.append(('idxmedian', get_median_index))
+            'count', 'idxmax', 'idxmin', ('idxmedian', get_median_index)
+        return contrib_functions, function_names
+
+    @staticmethod
     def extract_features_simplified(word_pairs_df: pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0,
-                                    rs_col='pred', scaled=True):
+                                    rs_col='pred', scaled=True, additive_only=False):
         # functions = ['mean', 'sum', 'min', 'max', ('M-m', lambda x: x.max() - x.min())]
-        function_names = ['mean', 'sum', 'min', 'max', 'M-m']
+        # function_names = ['mean', 'sum', 'min', 'max', 'M-m']
+        contrib_functions, function_names = FeatureContribution.get_contrib_functions(additive_only)
 
         neg_mask = (word_pairs_df[rs_col] < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
                 word_pairs_df.right_word == '[UNP]')
         com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
 
-        functions = ['count', 'idxmax', 'idxmin']
         if scaled:
             com_df[rs_col] = (com_df[rs_col] - 0.5) * 2
-        paired_stat = com_df.groupby(['id'])[rs_col].agg(functions)
+        paired_stat = com_df.groupby(['id'])[rs_col].agg(contrib_functions)
         paired_stat.columns += '_paired'
         if scaled:
             non_com_df[rs_col] = non_com_df[rs_col] * 2
         non_com_df['comp_pred'] = (1 - non_com_df[rs_col]) if complementary else non_com_df[rs_col]
-        unpaired_stat = (non_com_df.groupby(['id'])['comp_pred']).agg(functions)
+        unpaired_stat = (non_com_df.groupby(['id'])['comp_pred']).agg(contrib_functions)
         unpaired_stat.columns += '_unpaired'
         FeatureContribution.cycle_features([[com_df, paired_stat, '_paired'], [non_com_df, unpaired_stat, '_unpaired']],
                                            features=function_names)
         contribution_df = pd.concat([com_df, non_com_df], 0).sort_index().fillna(0)
 
-        stat = FeatureContribution().compute_derived_features(contribution_df, function_names, possible_unpaired=[''])
+        stat = FeatureContribution().compute_derived_features(contribution_df, function_names, possible_unpaired=[''],
+                                                              additive_only=additive_only)
         columns = np.setdiff1d(stat.columns, list(word_pairs_df.columns) + ['comp_pred'])
         return stat.loc[:, columns]
 
     @staticmethod
     def extract_features(word_pairs_df: pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0,
-                         rs_col='pred', scaled=True):
-        function_names = ['mean', 'sum', 'count', 'min', 'max', 'M-m', 'median']
-        functions = ['count', 'idxmax', 'idxmin', ('idxmedian', get_median_index)]
+                         rs_col='pred', scaled=True, additive_only=False):
+        functions, function_names = FeatureContribution.get_contrib_functions(additive_only)
         word_pairs_df = word_pairs_df.copy()
         all_stat = word_pairs_df.groupby(['id'])[rs_col].agg(functions)
         all_stat.columns += '_all'

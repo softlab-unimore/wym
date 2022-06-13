@@ -33,7 +33,7 @@ class WordPairGenerator(EMFeatures):
                        'right_attribute': []}
     unpair_threshold = 0.6
     cross_attr_threshold = .65
-    duplicate_threshold = 1.1 #.85 #1.1  # .75 #TODO adjust duplicate threshold
+    duplicate_threshold = .75 #.85 #1.1  # .75 #TODO adjust duplicate threshold
 
     def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, sentence_embedding_dict=None,
                  unpair_threshold=None, cross_attr_threshold=None, duplicate_threshold=None,
@@ -462,12 +462,12 @@ class WordPairGenerator(EMFeatures):
                     tmp_word_pairs, tmp_emb, pairs = self.generate_pairs(unpaired_words[unp_side + '_word'], words2,
                                                                          emb_unp, emb2, return_pairs=True,
                                                                          unpair_threshold=self.duplicate_threshold,
-                                                                         duplicate_threshold=self.duplicate_threshold)
+                                                                         duplicate_threshold=1.1)
                 elif all_side == 'left':
                     tmp_word_pairs, tmp_emb, pairs = self.generate_pairs(words1, unpaired_words[unp_side + '_word'],
                                                                          emb1, emb_unp, return_pairs=True,
                                                                          unpair_threshold=self.duplicate_threshold,
-                                                                         duplicate_threshold=self.duplicate_threshold)
+                                                                         duplicate_threshold=1.1)
                 side_mask = np.array(tmp_word_pairs[unp_side + '_word']) != '[UNP]'
                 for key in tmp_word_pairs.keys():
                     # display('first',word_pair[key],'and ', np.array(tmp_word_pairs[key])[side_mask])

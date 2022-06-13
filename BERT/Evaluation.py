@@ -1,11 +1,11 @@
 import gc
 import re
-import torch
 from functools import partial
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import torch
 from lime.lime_text import LimeTextExplainer
 from sklearn.metrics import f1_score, precision_score, recall_score
 from sklearn.metrics import roc_auc_score
@@ -45,22 +45,21 @@ def get_prefix(word_relevance_df, el, side: str):
                     word_prefixes.append(assigned_pref[idx])
                 else:
                     assert False, word
-
     return word_prefixes
 
 
-def append_prefix(word_relevance, df, united_view=False, exclude_attrs=['id', 'left_id', 'right_id', 'label']):
+def append_prefix(word_relevance, df, decision_unit_view=False, exclude_attrs=['id', 'left_id', 'right_id', 'label']):
     ids = word_relevance['id'].unique()
     res_df = []
     for id in ids:
         el = df[df.id == id]
         word_relevance_el = word_relevance[word_relevance.id == id]
-        if united_view is True:
+        if decision_unit_view is True:
             word_relevance_el['left_word_prefixes'] = get_prefix(word_relevance_el, el, 'left')
             word_relevance_el['right_word_prefixes'] = get_prefix(word_relevance_el, el, 'right')
         res_df.append(word_relevance_el.copy())
     res_df = pd.concat(res_df)
-    if united_view is True:
+    if decision_unit_view is True:
         mapper = Mapper(df.loc[:, np.setdiff1d(df.columns, exclude_attrs)], r' ')
         assert len(mapper.attr_map.keys()) % 2 == 0, 'The attributes must be the same for the two sources.'
         shift = int(len(mapper.attr_map.keys()) / 2)
@@ -296,7 +295,7 @@ class Landmark(object):
         self.cols = self.left_cols + self.right_cols
         self.explanations = {}
 
-    def explain(self, elements, conf='auto', num_samples=500, **argv):
+    def explain(self, elements, conf='auto', num_samples=500, verbose=False, **argv):
         """
         User interface to generate an explanations with the specified configurations for the elements passed in input.
         """
@@ -312,10 +311,11 @@ class Landmark(object):
             match_explanation = self.explain(match_elements, 'single', num_samples, **argv)
             no_match_explanation = self.explain(no_match_elements, 'double', num_samples, **argv)
             return pd.concat([match_explanation, no_match_explanation])
-
+        
+        to_cycle = tqdm(range(elements.shape[0])) if verbose else range(elements.shape[0])
         impact_list = []
         if 'LIME' == conf:
-            for idx in range(elements.shape[0]):
+            for idx in to_cycle:
                 impacts = self.explain_instance(elements.iloc[[idx]], variable_side='all', fixed_side=None,
                                                 num_samples=num_samples, **argv)
                 impacts['conf'] = 'LIME'
@@ -332,7 +332,7 @@ class Landmark(object):
             add_before = landmark
 
         # right landmark
-        for idx in range(elements.shape[0]):
+        for idx in to_cycle:
             impacts = self.explain_instance(elements.iloc[[idx]], variable_side=variable, fixed_side=landmark,
                                             add_before_perturbation=add_before, num_samples=num_samples,
                                             overlap=overlap, **argv)
@@ -345,7 +345,7 @@ class Landmark(object):
             add_before = landmark
 
         # left landmark
-        for idx in range(elements.shape[0]):
+        for idx in to_cycle:
             impacts = self.explain_instance(elements.iloc[[idx]], variable_side=variable, fixed_side=landmark,
                                             add_before_perturbation=add_before, num_samples=num_samples,
                                             overlap=overlap, **argv)
@@ -592,11 +592,11 @@ class Mapper(object):
 
 class Evaluate_explanation(Landmark):
 
-    def __init__(self, impacts_df, dataset, percentage=.25, num_round=10, united_view=False, **argv):
+    def __init__(self, impacts_df, dataset, percentage=.25, num_round=10, decision_unit_view=False, **argv):
         self.impacts_df = impacts_df
         self.percentage = percentage
         self.num_round = num_round
-        self.united_view = united_view
+        self.decision_unit_view = decision_unit_view
         super().__init__(dataset=dataset, **argv)
 
     def prepare_impacts(self, impacts_df, start_el, variable_side, fixed_side,
@@ -607,7 +607,7 @@ class Evaluate_explanation(Landmark):
         self.fixed_data_list = []
         for id in start_el.id.unique():
             impacts_sorted = impacts_df.query(f'id == {id}').sort_values('impact', ascending=False)
-            if self.united_view is True:
+            if self.decision_unit_view is True:
                 self.words_with_prefixes.append(
                     [impacts_sorted['left_word_prefixes'].values, impacts_sorted['right_word_prefixes'].values])
             else:
@@ -654,7 +654,7 @@ class Evaluate_explanation(Landmark):
         for comb_name, combinations in combinations_to_remove.items():
             for tokens_to_remove in combinations:
                 tmp_encoded = variable_encoded
-                if self.united_view: # remove both tokens of left and right as a united view without landmark
+                if self.decision_unit_view:  # remove both tokens of left and right as a united view without landmark
                     for turn_word_with_prefixes in words_with_prefixes:
                         for token_with_prefix in turn_word_with_prefixes[tokens_to_remove]:
                             tmp_encoded = tmp_encoded.replace(str(token_with_prefix), '')
@@ -693,7 +693,13 @@ class Evaluate_explanation(Landmark):
                 turn_comb = self.get_tokens_to_remove_AOPC(self.start_pred[index], self.words_with_prefixes[index],
                                                            self.impacts[index], k=k)
             elif utility == 'sufficiency':
-                turn_comb = self.get_tokens_to_remove_sufficiency(self.impacts[index], k=k)
+                turn_comb = self.get_tokens_to_remove_sufficiency(self.start_pred[index],
+                                                                  self.words_with_prefixes[index], self.impacts[index],
+                                                                  k=k)
+            elif utility == 'degradation':
+                turn_comb = self.get_tokens_to_remove_degradation(self.start_pred[index],
+                                                                  self.words_with_prefixes[index], self.impacts[index],
+                                                                  k=k)
             combinations_to_remove.append(turn_comb.copy())
             res = self.generate_descriptions(turn_comb, self.words_with_prefixes[index], self.variable_encoded[index])
             description_to_evaluate, comb_name_sequence, tokens_to_remove_sequence = res
@@ -708,6 +714,7 @@ class Evaluate_explanation(Landmark):
             self.batch_fixed_data = None
         all_descriptions = np.concatenate(description_to_evaluate_list)
         preds = self.restucture_and_predict(all_descriptions)[:, 1]
+        assert len(preds) == len(all_descriptions)
         splitted_preds = []
         start_idx = 0
         for turn_desc in description_to_evaluate_list:
@@ -715,7 +722,6 @@ class Evaluate_explanation(Landmark):
             splitted_preds.append(preds[start_idx: end_idx])
             start_idx = end_idx
         self.preds = preds
-        # assert False
         res_list = []
         for index, id in enumerate(start_el.id.unique()):
             evaluation = {'id': id, 'start_pred': self.start_pred[index]}
@@ -729,11 +735,13 @@ class Evaluate_explanation(Landmark):
                 evaluation.update(comb_name=comb_name, new_pred=new_pred, correct=correct,
                                   expected_delta=np.sum(impacts[tokens_to_remove]),
                                   detected_delta=-(new_pred - start_pred),
+                                  num_tokens=impacts.shape[0]
                                   )
-                if self.united_view is True:
-                    evaluation.update(tokens_removed=list([turn_pref[tokens_to_remove] for turn_pref in words_with_prefixes]))
+                if self.decision_unit_view is True:
+                    evaluation.update(
+                        tokens_removed=list([list(turn_pref[tokens_to_remove]) for turn_pref in words_with_prefixes]))
                 else:
-                    evaluation.update(tokens_removed = list(words_with_prefixes[tokens_to_remove]))
+                    evaluation.update(tokens_removed=list(words_with_prefixes[tokens_to_remove]))
                 res_list.append(evaluation.copy())
         return res_list
 
@@ -774,19 +782,38 @@ class Evaluate_explanation(Landmark):
         combination = {f'MoRF_{i}': [np.arange(i)] for i in range(1, min_tokens + 1)}
         np.random.seed(0)
         lent = len(impacts_sorted)
-        for turn_n_tokens in range(1, min_tokens+1):
+        for turn_n_tokens in range(1, min_tokens + 1):
             combination[f'random_{turn_n_tokens}'] = [np.random.choice(lent, turn_n_tokens, replace=False) for _ in
                                                       range(self.num_round)]
         return combination
 
-    def get_tokens_to_remove_sufficiency(self, impacts_sorted, k=10):
+    def get_tokens_to_remove_degradation(self, start_pred, tokens_sorted, impacts_sorted, k=100):
+        lent = len(impacts_sorted)
+        min_tokens = lent
+        if start_pred > .5:
+            combination = {f'MoRF_{i}': [np.arange(i)] for i in range(1, min_tokens + 1)}
+            combination.update(**{f'LeRF_{i}': [np.arange(lent - i, lent)] for i in range(1, min_tokens + 1)})
+        else:
+            combination = {f'MoRF_{i}': [np.arange(lent - i, lent)] for i in range(1, min_tokens + 1)}
+            combination.update(**{f'LeRF_{i}': [np.arange(i)] for i in range(1, min_tokens + 1)})
+        np.random.seed(0)
+        for turn_n_tokens in range(1, min_tokens + 1):
+            combination[f'random_{turn_n_tokens}'] = [ np.random.choice(lent, turn_n_tokens, replace=False) for _ in
+                range(self.num_round)]
+        return combination
+
+    def get_tokens_to_remove_sufficiency(self, start_pred, tokens_sorted, impacts_sorted, k=10):
         lent = len(impacts_sorted)
         min_tokens = min(lent, k)
-        combination = {f'top_{i}': [np.arange(i,lent)] for i in range(1, min_tokens + 1)}
+        if start_pred > .5:
+            combination = {f'top_{i}': [np.arange(i, lent)] for i in range(1, min_tokens + 1)}
+        else:
+            combination = {f'top_{i}': [np.arange(lent - i)] for i in range(1, min_tokens + 1)}
         np.random.seed(0)
-        for turn_n_tokens in range(1, min_tokens+1):
-            combination[f'random_{turn_n_tokens}'] = [np.setdiff1d(np.arange(lent), np.random.choice(lent, turn_n_tokens, replace=False)) for _ in
-                                                      range(self.num_round)]
+        for turn_n_tokens in range(1, min_tokens + 1):
+            combination[f'random_{turn_n_tokens}'] = [
+                np.setdiff1d(np.arange(lent), np.random.choice(lent, turn_n_tokens, replace=False)) for _ in
+                range(self.num_round)]
         return combination
 
     def evaluate_set(self, ids, conf_name, variable_side='left', fixed_side='right', add_before_perturbation=None,

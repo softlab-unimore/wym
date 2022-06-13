@@ -2,13 +2,11 @@ import copy
 import gc
 import os
 import pickle
-import string
 import sys
 from functools import partial
 from warnings import simplefilter
-
+import seaborn as sns
 import matplotlib.pyplot as plt
-import nltk
 import numpy as np
 import pandas as pd
 import torch
@@ -17,8 +15,6 @@ import torch.optim as optim
 from IPython.display import display
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import AdaBoostClassifier
-from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -26,8 +22,7 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.svm import SVC
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
@@ -43,6 +38,33 @@ from WordPairGenerator import WordPairGenerator, WordPairGeneratorEdit
 
 
 class Routine:
+    @staticmethod
+    def plot_token_contribution(el_df, score_col='token_contribution', cut=0.0):
+
+        sns.set(rc={'figure.figsize': (10, 10)})
+
+        tmp_df = el_df.copy()
+        tmp_df = tmp_df.set_index(['left_word', 'right_word'])
+        tmp_df = tmp_df[tmp_df[score_col].abs() >= cut]
+        # colors = ['orange' ] * tmp_df.shape[0]
+        colors = np.where(tmp_df[score_col] >= 0, 'green', 'red')
+
+        g = tmp_df.plot(y=score_col, kind='barh', color=colors, alpha=.5, legend='')
+        # plt.xlim(-0.5, 0.5)
+        for p in g.patches:
+            offset = -10 if p.get_width() > 0 else 10
+            g.annotate(format(p.get_width(), '.3f'),
+                       (p.get_width(), p.get_y()),
+                       ha='right' if p.get_width() > 0 else 'left',
+                       va='center',
+                       xytext=(offset, 2.5),
+                       textcoords='offset points')
+        plt.ylabel('')
+        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=14)
+        plt.tight_layout()
+        plt.show()
+        # g.get_figure().savefig(os.path.join(model_files_path,'examples',"microsoft.pdf"), dpi=400)
+
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
                  col_to_drop=[], model_files_path=None,
@@ -72,7 +94,7 @@ class Routine:
         self.sentence_embedding_dict = None
         self.word_pair_model = None
         self.word_pairing_kind = None
-
+        self.additive_only = False
         self.cos_sim = None
         self.feature_kind = None
         if dataset_path is None:
@@ -106,7 +128,6 @@ class Routine:
         if not hasattr(self, 'table_B'):
             self.table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv')).drop(col_to_drop, 1)
 
-
         if dataset_name == 'BeerAdvo-RateBeer':
             table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv'))
             table_B = pd.read_csv(os.path.join(dataset_path, 'tableB.csv'))
@@ -131,7 +152,6 @@ class Routine:
             table_A['Brew_Factory_Name'] = table_A['Brew_Factory_Name'].str.encode('latin-1').str.decode('utf-8')
             self.table_A = table_A
             self.table_B = table_B
-
 
         left_ids = []
         right_ids = []
@@ -169,7 +189,6 @@ class Routine:
 
         self.table_A = self.table_A.replace('^None$', np.nan, regex=True).replace('^nan$', np.nan, regex=True)
         self.table_B = self.table_B.replace('^None$', np.nan, regex=True).replace('^nan$', np.nan, regex=True)
-
 
         self.words_divided = {}
         tmp_path = os.path.join(self.model_files_path, 'words_maps.pickle')
@@ -304,6 +323,7 @@ class Routine:
                 res[side + '_sentence_emb'] = sentence_emb
             else:
                 emb, words = we.generate_embedding(tmp_df, chunk_size=chunk_size)
+
             res[side + '_emb'] = emb
             res[side + '_words'] = words
         return res
@@ -467,11 +487,13 @@ class Routine:
             if self.word_pairing_kind == 'word_similarity':
                 feat, word_pairs = self.extract_features(None, self.words_pairs_dict[name],
                                                          None, None,
-                                                         sentence_emb_pairs=sentence_emb_pairs, **kwargs)
+                                                         sentence_emb_pairs=sentence_emb_pairs,
+                                                         additive_only=self.additive_only, **kwargs)
             else:
                 feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
                                                          self.emb_pairs_dict[name], self.train_data_loader,
-                                                         sentence_emb_pairs=sentence_emb_pairs, **kwargs)
+                                                         sentence_emb_pairs=sentence_emb_pairs,
+                                                         additive_only=self.additive_only, **kwargs)
             features_dict[name] = feat
             words_pairs_dict[name] = word_pairs
         self.features_dict, self.words_pairs_dict = features_dict, words_pairs_dict
@@ -503,22 +525,27 @@ class Routine:
         return features, word_pair_corrected
 
     def EM_modelling(self, *args, do_evaluation=False, do_feature_selection=False, results_path='results'):
-
+        if self.additive_only and results_path == 'results':
+            results_path = 'results_additive'
         if hasattr(self, 'models') == False:
             mmScaler = MinMaxScaler()
             mmScaler.clip = False
             self.models = [
                 ('LR',
                  Pipeline([('mm', copy.copy(mmScaler)), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
+                ('LR_std',
+                 Pipeline(
+                     [('mm', copy.copy(StandardScaler())), ('LR', LogisticRegression(max_iter=200, random_state=0))])),
                 ('LDA', Pipeline([('mm', copy.copy(mmScaler)), ('LDA', LinearDiscriminantAnalysis())])),
+                ('LDA_std', Pipeline([('mm', copy.copy(StandardScaler())), ('LDA', LinearDiscriminantAnalysis())])),
                 ('KNN', Pipeline([('mm', copy.copy(mmScaler)), ('KNN', KNeighborsClassifier())])),
                 ('CART', DecisionTreeClassifier(random_state=0)),
                 ('NB', GaussianNB()),
-                ('SVM', Pipeline([('mm', copy.copy(mmScaler)), ('SVM', SVC(probability=True, random_state=0))])),
-                ('AB', AdaBoostClassifier(random_state=0)),
+                # ('SVM', Pipeline([('mm', copy.copy(mmScaler)), ('SVM', SVC(probability=True, random_state=0))])),
+                # ('AB', AdaBoostClassifier(random_state=0)),
                 ('GBM', GradientBoostingClassifier(random_state=0)),
                 ('RF', RandomForestClassifier(random_state=0)),
-                ('ET', ExtraTreesClassifier(random_state=0)),
+                # ('ET', ExtraTreesClassifier(random_state=0)),
                 ('dummy', DummyClassifier(strategy='stratified', random_state=0)),
             ]
         # models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
@@ -536,7 +563,10 @@ class Routine:
                                                   [y_train, y_valid, y_test]):
                 df_pred[turn_name] = model.predict(turn_df)
                 for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-                    res[(turn_name, score_name)].append(scorer(turn_y, df_pred[turn_name]))
+                    score_value = scorer(turn_y, df_pred[turn_name])
+                    res[(turn_name, score_name)].append(score_value)
+                    if turn_name == 'test' and score_name == 'f1':
+                        print(f'{name:<10}-{score_name} {score_value}')
 
         print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
@@ -656,6 +686,7 @@ class Routine:
         feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
                                                  model=self.word_pair_model, train_data_loader=self.train_data_loader,
                                                  sentence_emb_pairs=sentence_emb_pairs,
+                                                 additive_only=self.additive_only,
                                                  **kwargs)
 
         return feat, word_pairs
@@ -664,7 +695,8 @@ class Routine:
         self.reset_networks = False
         self.net_train()
 
-        def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False):
+        def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False,
+                      additive_only=self.additive_only):
 
             df_to_process = df_to_process.copy()
             if 'id' not in df_to_process.columns:
@@ -689,7 +721,8 @@ class Routine:
                     lr = routine.model['LR']
                     co = lr.coef_
                     co_df = pd.DataFrame(co, columns=routine.features_dict['test'].columns).T
-                    turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, routine.cols)
+                    turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, routine.cols,
+                                                                                additive_only=additive_only)
                     for x in co_df.index:
                         turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
                     data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
@@ -707,7 +740,8 @@ class Routine:
         lr = self.model['LR']
         co = lr.coef_
         co_df = pd.DataFrame(co, columns=self.features_dict[df_name].columns).T
-        turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, self.cols)
+        turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, self.cols,
+                                                                    additive_only=self.additive_only, )
         for x in co_df.index:
             turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
         data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
@@ -867,3 +901,4 @@ class Routine:
             pass
 
         return word_relevance  # res_df_match, res_df_no_match, delta_performance, correlation_data
+
