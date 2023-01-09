@@ -496,8 +496,6 @@ class WordPairGenerator(EMFeatures):
         if self.sentence_embedding_dict is not None:
             tmp_array = torch.reshape(torch.stack([sent_emb_1, sent_emb_2]), (1, 2, -1))
             sent_emb_pair = torch.tile(tmp_array, (emb_pair.shape[0], 1, 1))
-            # print(sent_emb_pair.shape) # TODO remove it
-            # print(emb_pair.shape)  # TODO remove it
             return word_pair, emb_pair, sent_emb_pair
         else:
             return word_pair, emb_pair

@@ -23,7 +23,7 @@ def do_reduced_training_experiment(routine, n_repetition=3, train_size_list=[500
             print(e)
 
         # Sample training
-        df = routine.train
+        df = routine.train_merged
         vc = df['label'].value_counts()
         propotions = {1: vc[1] / (vc[0] + vc[1]), 0:
             vc[0] / (vc[1] + vc[0])}

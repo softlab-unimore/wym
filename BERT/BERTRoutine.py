@@ -1,21 +1,24 @@
+
 import copy
 import gc
 import os
 import pickle
 import sys
+from datetime import datetime
 from functools import partial
 from warnings import simplefilter
-import seaborn as sns
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from IPython.display import display
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, AdaBoostClassifier, ExtraTreesClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, precision_score, recall_score
@@ -23,11 +26,12 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 
-from Evaluation import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
+from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
 from FeatureContribution import FeatureContribution
 from FeatureExtractor import FeatureExtractor
 from Finetune import finetune_BERT
@@ -38,32 +42,7 @@ from WordPairGenerator import WordPairGenerator, WordPairGeneratorEdit
 
 
 class Routine:
-    @staticmethod
-    def plot_token_contribution(el_df, score_col='token_contribution', cut=0.0):
 
-        sns.set(rc={'figure.figsize': (10, 10)})
-
-        tmp_df = el_df.copy()
-        tmp_df = tmp_df.set_index(['left_word', 'right_word'])
-        tmp_df = tmp_df[tmp_df[score_col].abs() >= cut]
-        # colors = ['orange' ] * tmp_df.shape[0]
-        colors = np.where(tmp_df[score_col] >= 0, 'green', 'red')
-
-        g = tmp_df.plot(y=score_col, kind='barh', color=colors, alpha=.5, legend='')
-        # plt.xlim(-0.5, 0.5)
-        for p in g.patches:
-            offset = -10 if p.get_width() > 0 else 10
-            g.annotate(format(p.get_width(), '.3f'),
-                       (p.get_width(), p.get_y()),
-                       ha='right' if p.get_width() > 0 else 'left',
-                       va='center',
-                       xytext=(offset, 2.5),
-                       textcoords='offset points')
-        plt.ylabel('')
-        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=14)
-        plt.tight_layout()
-        plt.show()
-        # g.get_figure().savefig(os.path.join(model_files_path,'examples',"microsoft.pdf"), dpi=400)
 
     def __init__(self, dataset_name, dataset_path, project_path,
                  reset_files=False, model_name='BERT', device=None, reset_networks=False, clean_special_char=True,
@@ -71,18 +50,11 @@ class Routine:
                  softlab_path='./content/drive/Shareddrives/SoftLab/',
                  verbose=True, we_finetuned=False,
                  we_finetune_path=None, num_epochs=10,
-                 sentence_embedding=True, we=None):
+                 sentence_embedding=True, we=None,
+                 train_batch_size=16):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
-        simplefilter(action='ignore', category=FutureWarning)
-        simplefilter(action='ignore')
-        pd.options.display.float_format = '{:.4f}'.format
-        pd.options.display.max_rows = 150
-        pd.options.display.max_columns = 150
-        pd.options.display.max_colwidth = 100
-        pd.options.display.precision = 15
-        pd.options.display.max_info_columns = 150
         plt.rcParams["figure.figsize"] = (18, 6)
         self.softlab_path = os.path.join(softlab_path)
         self.reset_files = reset_files  # @ param {type:"boolean"}
@@ -101,7 +73,9 @@ class Routine:
             self.dataset_path = os.path.join(softlab_path, 'Dataset', 'Entity Matching', dataset_name)
         else:
             self.dataset_path = dataset_path
-        self.project_path = os.path.join(softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
+        if project_path is None:
+            project_path = os.path.join(softlab_path, 'Projects', 'WYM')
+        self.project_path = project_path
         if model_files_path is None:
             self.model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
         else:
@@ -120,9 +94,9 @@ class Routine:
         sys.path.append(os.path.join(project_path, 'common_functions'))
         sys.path.append(os.path.join(project_path, 'src'))
         pd.options.display.max_colwidth = 130
-        self.train = pd.read_csv(os.path.join(dataset_path, 'train_merged.csv'))
-        self.test = pd.read_csv(os.path.join(dataset_path, 'test_merged.csv'))
-        self.valid = pd.read_csv(os.path.join(dataset_path, 'valid_merged.csv'))
+        self.train_merged = pd.read_csv(os.path.join(dataset_path, 'train_merged.csv'))
+        self.test_merged = pd.read_csv(os.path.join(dataset_path, 'test_merged.csv'))
+        self.valid_merged = pd.read_csv(os.path.join(dataset_path, 'valid_merged.csv'))
         if not hasattr(self, 'table_A'):
             self.table_A = pd.read_csv(os.path.join(dataset_path, 'tableA.csv')).drop(col_to_drop, 1)
         if not hasattr(self, 'table_B'):
@@ -155,7 +129,7 @@ class Routine:
 
         left_ids = []
         right_ids = []
-        for df in [self.train, self.valid, self.test]:
+        for df in [self.train_merged, self.valid_merged, self.test_merged]:
             left_ids.append(df.left_id.values)
             right_ids.append(df.right_id.values)
         left_ids = np.unique(np.concatenate(left_ids))
@@ -206,37 +180,41 @@ class Routine:
 
         tmp_cols = ['id', 'left_id', 'right_id', 'label']
         self.train_merged = pd.merge(
-            pd.merge(self.train[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
+            pd.merge(self.train_merged[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
         self.test_merged = pd.merge(
-            pd.merge(self.test[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
+            pd.merge(self.test_merged[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
         self.valid_merged = pd.merge(
-            pd.merge(self.valid[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
+            pd.merge(self.valid_merged[tmp_cols], self.table_A.add_prefix('left_'), on='left_id'),
             self.table_B.add_prefix('right_'), on='right_id').sort_values('id').reset_index(drop='True')
         for col, type in zip(['id', 'label'], ['UInt32', 'UInt8']):
             self.train_merged[col] = self.train_merged[col].astype(type)
             self.valid_merged[col] = self.valid_merged[col].astype(type)
             self.test_merged[col] = self.test_merged[col].astype(type)
 
-        self.train = self.train_merged
-        self.valid = self.valid_merged
-        self.test = self.test_merged
+
         self.sentence_embedding = sentence_embedding
+        self.time_list_dict = []
+        self.time_dict = {}
         if we is not None:
             self.we = we
         elif we_finetuned:
             if we_finetune_path is not None:
                 finetuned_path = we_finetune_path
-            elif we_finetuned == 'SBERT':
+            elif we_finetuned == 'sBERT':
                 model_save_path = os.path.join(self.model_files_path, 'sBERT')
-                if reset_files or os.path.isdir(model_save_path) is False:
-                    finetuned_path = finetune_BERT(self, num_epochs=num_epochs, model_save_path=model_save_path)
+                if reset_files or os.path.exists(os.path.join(model_save_path, 'pytorch_model.bin')) is False:
+                    a = datetime.now()
+                    finetuned_path = finetune_BERT(self, num_epochs=num_epochs, model_save_path=model_save_path,
+                                                   train_batch_size=train_batch_size)
+                    b = datetime.now()
+                    self.time_dict.update(phase='sbert-finetuning', time=(b - a).total_seconds())
+                    self.time_list_dict.append(self.time_dict.copy())
                 else:
                     finetuned_path = model_save_path
             else:
                 finetuned_path = os.path.join(self.project_path, 'dataset_files', 'finetuned_models', dataset_name)
-
             self.we = WordEmbedding(device=self.device, verbose=verbose, model_path=finetuned_path,
                                     sentence_embedding=sentence_embedding)
         else:
@@ -352,18 +330,18 @@ class Routine:
             print(e)
 
             if word_sim:
-                word_pair_generator = WordPairGeneratorEdit(df=self.test, use_schema=use_schema, device=self.device,
+                word_pair_generator = WordPairGeneratorEdit(df=self.test_merged, use_schema=use_schema, device=self.device,
                                                             verbose=self.verbose,
                                                             words_divided=self.words_divided,
                                                             sentence_embedding_dict=self.sentence_embedding_dict,
                                                             **kwargs)
             else:
-                word_pair_generator = WordPairGenerator(self.words, self.embeddings, words_divided=self.words_divided,
-                                                        df=self.test,
+                word_pair_generator = WordPairGenerator(words=self.words, embeddings=self.embeddings,
+                                                        words_divided=self.words_divided, df=self.test_merged,
                                                         use_schema=use_schema, device=self.device, verbose=self.verbose,
                                                         sentence_embedding_dict=self.sentence_embedding_dict,
                                                         **kwargs)
-            for df_name, df in zip(['train', 'valid', 'test'], [self.train, self.valid, self.test]):
+            for df_name, df in zip(['train', 'valid', 'test'], [self.train_merged, self.valid_merged, self.test_merged]):
                 if word_sim:
                     word_pairs = word_pair_generator.process_df(df)
                 else:
@@ -428,7 +406,7 @@ class Routine:
                 sentence_emb_pairs = self.sentence_emb_pairs_dict['train']
             else:
                 sentence_emb_pairs = None
-
+        valid_sententce_emb_pairs = None
         if valid_pairs is None or valid_emb is None:
             valid_pairs = self.words_pairs_dict['valid']
             valid_emb = self.emb_pairs_dict['valid']
@@ -485,22 +463,29 @@ class Routine:
             else:
                 sentence_emb_pairs = None
             if self.word_pairing_kind == 'word_similarity':
-                feat, word_pairs = self.extract_features(None, self.words_pairs_dict[name],
-                                                         None, None,
-                                                         sentence_emb_pairs=sentence_emb_pairs,
-                                                         additive_only=self.additive_only, **kwargs)
+                feat, word_pairs = self.extract_relevance_and_features(None, self.words_pairs_dict[name],
+                                                                       None, None,
+                                                                       sentence_emb_pairs=sentence_emb_pairs,
+                                                                       additive_only=self.additive_only, **kwargs)
             else:
-                feat, word_pairs = self.extract_features(self.word_pair_model, self.words_pairs_dict[name],
-                                                         self.emb_pairs_dict[name], self.train_data_loader,
-                                                         sentence_emb_pairs=sentence_emb_pairs,
-                                                         additive_only=self.additive_only, **kwargs)
+                feat, word_pairs = self.extract_relevance_and_features(self.word_pair_model,
+                                                                       self.words_pairs_dict[name],
+                                                                       self.emb_pairs_dict[name],
+                                                                       self.train_data_loader,
+                                                                       sentence_emb_pairs=sentence_emb_pairs,
+                                                                       additive_only=self.additive_only, **kwargs)
             features_dict[name] = feat
             words_pairs_dict[name] = word_pairs
         self.features_dict, self.words_pairs_dict = features_dict, words_pairs_dict
         return features_dict, words_pairs_dict
 
-    def extract_features(self, model: NetAccoppiate, word_pairs, emb_pairs, train_data_loader, sentence_emb_pairs=None,
-                         **kwargs):
+    def relevance_score(self, word_pairs, emb_pairs, sentence_emb_pairs=None, model=None, train_data_loader=None):
+        if model is None or train_data_loader is None:
+            if self.word_pair_model is None or self.train_data_loader is None:
+                _ = self.net_train(lr=2e-5, num_epochs=25)
+            model = self.word_pair_model
+            train_data_loader = self.train_data_loader
+
         if self.cos_sim is not None or self.word_pairing_kind == 'word_similarity':
             if self.cos_sim == 'binary':
                 word_pair_corrected = word_pairs
@@ -516,12 +501,43 @@ class Routine:
             word_pair_corrected = data_loader.word_pairs_corrected
             with torch.no_grad():
                 word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
+        return word_pair_corrected
 
-            # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
+    def extract_features(self, word_pair, **kwargs):
         if self.feature_kind == 'min':
-            features = self.feature_extractor.extract_features_min(word_pair_corrected, **kwargs)
+            features = self.feature_extractor.extract_features_min(word_pair, **kwargs)
         else:
-            features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
+            features = self.feature_extractor.extract_features_by_attr(word_pair, self.cols, **kwargs)
+        return features
+
+    def extract_relevance_and_features(self, model: NetAccoppiate, word_pairs, emb_pairs, train_data_loader,
+                                       sentence_emb_pairs=None,
+                                       **kwargs):
+
+        # if self.cos_sim is not None or self.word_pairing_kind == 'word_similarity':
+        #     if self.cos_sim == 'binary':
+        #         word_pair_corrected = word_pairs
+        #         word_pair_corrected['pred'] = np.where(word_pair_corrected['cos_sim'] > 0, 1, 0)
+        #     else:
+        #         word_pair_corrected = word_pairs
+        #         word_pair_corrected['pred'] = word_pair_corrected['cos_sim']
+        # else:
+        #     model.eval()
+        #     model.to(self.device)
+        #     data_loader = train_data_loader
+        #     data_loader.__init__(word_pairs, emb_pairs, sentence_emb_pairs)
+        #     word_pair_corrected = data_loader.word_pairs_corrected
+        #     with torch.no_grad():
+        #         word_pair_corrected['pred'] = model(data_loader.X.to(self.device)).cpu().detach().numpy()
+
+        # features = self.feature_extractor.extract_features(word_pair_corrected, **kwargs)
+        # if self.feature_kind == 'min':
+        #     features = self.feature_extractor.extract_features_min(word_pair_corrected, **kwargs)
+        # else:
+        #     features = self.feature_extractor.extract_features_by_attr(word_pair_corrected, self.cols, **kwargs)
+        word_pair_corrected = self.relevance_score(word_pairs, emb_pairs, sentence_emb_pairs=sentence_emb_pairs,
+                                                   model=model, train_data_loader=train_data_loader)
+        features = self.extract_features(word_pair_corrected)
         return features, word_pair_corrected
 
     def EM_modelling(self, *args, do_evaluation=False, do_feature_selection=False, results_path='results'):
@@ -541,32 +557,46 @@ class Routine:
                 ('KNN', Pipeline([('mm', copy.copy(mmScaler)), ('KNN', KNeighborsClassifier())])),
                 ('CART', DecisionTreeClassifier(random_state=0)),
                 ('NB', GaussianNB()),
-                # ('SVM', Pipeline([('mm', copy.copy(mmScaler)), ('SVM', SVC(probability=True, random_state=0))])),
-                # ('AB', AdaBoostClassifier(random_state=0)),
+                ('SVM', Pipeline([('mm', copy.copy(mmScaler)), ('SVM', SVC(probability=True, random_state=0))])),
+                ('AB', AdaBoostClassifier(random_state=0)),
                 ('GBM', GradientBoostingClassifier(random_state=0)),
                 ('RF', RandomForestClassifier(random_state=0)),
-                # ('ET', ExtraTreesClassifier(random_state=0)),
+                ('ET', ExtraTreesClassifier(random_state=0)),
                 ('dummy', DummyClassifier(strategy='stratified', random_state=0)),
             ]
         # models.append(('Vote', VotingClassifier(models[:-1], voting='soft')))
         model_names = [x[0] for x in self.models]
 
-        X_train, y_train = self.features_dict['train'].to_numpy(), self.train.label.astype(int)
-        X_valid, y_valid = self.features_dict['valid'].to_numpy(), self.valid.label.astype(int)
-        X_test, y_test = self.features_dict['test'].to_numpy(), self.test.label.astype(int)
+        X_train, y_train = self.features_dict['train'].to_numpy(), self.train_merged.label.astype(int)
+        X_valid, y_valid = self.features_dict['valid'].to_numpy(), self.valid_merged.label.astype(int)
+        X_test, y_test = self.features_dict['test'].to_numpy(), self.test_merged.label.astype(int)
 
         res = {(x, y): [] for x in ['train', 'valid', 'test'] for y in ['f1', 'precision', 'recall']}
         df_pred = {}
+        time_list_dict = []
+        time_dict = {}
         for name, model in tqdm(self.models):
+            time_dict['model_name'] = name
+            a = datetime.now()
             model.fit(X_train, y_train)
+            time_dict.update( time=(datetime.now() - a).total_seconds())
+            time_dict.update(phase='train', df_split='train')
+            time_list_dict.append(time_dict.copy())
+
             for turn_name, turn_df, turn_y in zip(['train', 'valid', 'test'], [X_train, X_valid, X_test],
                                                   [y_train, y_valid, y_test]):
+                a = datetime.now()
                 df_pred[turn_name] = model.predict(turn_df)
+                time_dict.update(phase='predict', time=(datetime.now() - a).total_seconds())
+                time_dict.update(df_split=turn_name, size=turn_df.shape[0])
+                time_list_dict.append(time_dict.copy())
                 for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
                     score_value = scorer(turn_y, df_pred[turn_name])
                     res[(turn_name, score_name)].append(score_value)
                     if turn_name == 'test' and score_name == 'f1':
                         print(f'{name:<10}-{score_name} {score_value}')
+
+        self.timing_models = pd.DataFrame(time_list_dict)
 
         print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
@@ -589,9 +619,9 @@ class Routine:
         if do_feature_selection:
             print('running feature score')
             score_df = {'feature': [], 'score': []}
-            X_train, y_train = self.features_dict['train'], self.train.label.astype(int)
-            X_valid, y_valid = self.features_dict['valid'], self.valid.label.astype(int)
-            X_test, y_test = self.features_dict['test'], self.test.label.astype(int)
+            X_train, y_train = self.features_dict['train'], self.train_merged.label.astype(int)
+            X_valid, y_valid = self.features_dict['valid'], self.valid_merged.label.astype(int)
+            X_test, y_test = self.features_dict['test'], self.test_merged.label.astype(int)
 
             cols = self.features_dict['train'].columns
             new_cols = cols
@@ -632,7 +662,7 @@ class Routine:
 
                 res_df.to_csv(os.path.join(self.model_files_path, results_path, 'performances.csv'))
 
-        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
+        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train_merged.label.astype(int)
         best_model.fit(X_train, y_train)
         model_data = {'features': best_features, 'model': best_model}
         tmp_path = os.path.join(self.model_files_path, 'best_feature_model_data.pickle')
@@ -642,7 +672,7 @@ class Routine:
 
         linear_model = Pipeline([('LR', LogisticRegression(max_iter=200, random_state=0))])
         # LogisticRegression(max_iter=200, random_state=0)
-        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train.label.astype(int)
+        X_train, y_train = self.features_dict['train'][best_features].to_numpy(), self.train_merged.label.astype(int)
         linear_model.fit(X_train, y_train)
         model_data = {'features': best_features, 'model': linear_model}
         tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
@@ -662,8 +692,7 @@ class Routine:
             self.evaluation(self.valid_merged)
         return res_df
 
-    def get_match_score(self, features_df, lr=False, reload=False):
-
+    def load_model(self, lr=False, reload=False):
         if lr is True:
             tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
         else:
@@ -673,64 +702,116 @@ class Routine:
                 model_data = pickle.load(file)
             self.best_model_data = model_data
         self.model = self.best_model_data['model']
+
+    def get_match_score(self, features_df, lr=False, reload=False):
+        self.load_model(lr=lr, reload=reload)
         X = features_df[self.best_model_data['features']].to_numpy()
         if isinstance(self.model, Pipeline) and isinstance(self.model[0], MinMaxScaler):
             self.model[0].clip = False
-        return self.model.predict_proba(X)[:, 1]
+        match_score = self.model.predict_proba(X)[:, 1]
+        match_score_series = pd.Series(0.5, index=features_df.index)
+        features = features_df
+        match_score_series[features.index] = match_score
+        match_score = match_score_series.values
+        return match_score
+
+    def get_contribution_score(self, word_relevance, features, lr=True, reload=False):
+        self.load_model(lr=lr, reload=reload)
+        lr = self.model['LR']
+        co = lr.coef_
+        co_df = pd.DataFrame(co, columns=features.columns).T
+        turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, self.cols)
+        for x in co_df.index:
+            turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+        data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
+        word_relevance['token_contribution'] = data
+        return word_relevance
 
     def plot_rf(self, rf, columns):
         pd.DataFrame([rf.feature_importances_], columns=columns).T.plot.bar(figsize=(25, 5));
 
-    def get_relevance_scores(self, word_pairs, emb_pairs, sentence_emb_pairs=None, **kwargs):  # m2
+    def get_relevance_scores_and_features(self, word_pairs, emb_pairs, sentence_emb_pairs=None, **kwargs):  # m2
 
-        feat, word_pairs = self.extract_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
-                                                 model=self.word_pair_model, train_data_loader=self.train_data_loader,
-                                                 sentence_emb_pairs=sentence_emb_pairs,
-                                                 additive_only=self.additive_only,
-                                                 **kwargs)
+        feat, word_pairs = self.extract_relevance_and_features(emb_pairs=emb_pairs, word_pairs=word_pairs,
+                                                               model=self.word_pair_model,
+                                                               train_data_loader=self.train_data_loader,
+                                                               sentence_emb_pairs=sentence_emb_pairs,
+                                                               additive_only=self.additive_only,
+                                                               **kwargs)
 
         return feat, word_pairs
 
-    def get_predictor(self):
+    def get_predictor(self, remove_decision_unit_only=False):
         self.reset_networks = False
         self.net_train()
+        if remove_decision_unit_only is False:
+            def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False,
+                          additive_only=self.additive_only):
 
-        def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False,
-                      additive_only=self.additive_only):
+                df_to_process = df_to_process.copy()
+                if 'id' not in df_to_process.columns:
+                    df_to_process = df_to_process.reset_index(drop=True)
+                    df_to_process['id'] = df_to_process.index
+                gc.collect()
+                torch.cuda.empty_cache()
+                data_dict = routine.get_processed_data(df_to_process, chunk_size=chunk_size)
+                res = routine.get_word_pairs(df_to_process, data_dict)
+                features, word_relevance = routine.get_relevance_scores_and_features(*res)
 
-            df_to_process = df_to_process.copy()
-            if 'id' not in df_to_process.columns:
-                df_to_process = df_to_process.reset_index(drop=True)
-                df_to_process['id'] = df_to_process.index
-            gc.collect()
-            torch.cuda.empty_cache()
-            data_dict = routine.get_processed_data(df_to_process, chunk_size=chunk_size)
-            res = routine.get_word_pairs(df_to_process, data_dict)
-            features, word_relevance = routine.get_relevance_scores(*res)
-
-            if lr:
-                match_score = routine.get_match_score(features, lr=lr, reload=reload)
-            else:
-                match_score = routine.get_match_score(features, reload=reload)
-            match_score_series = pd.Series(0.5, index=df_to_process.id)
-            match_score_series[features.index] = match_score
-            match_score = match_score_series.values
-
-            if return_data:
                 if lr:
-                    lr = routine.model['LR']
-                    co = lr.coef_
-                    co_df = pd.DataFrame(co, columns=routine.features_dict['test'].columns).T
-                    turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, routine.cols,
-                                                                                additive_only=additive_only)
-                    for x in co_df.index:
-                        turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
-                    data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
-                    word_relevance['token_contribution'] = data
-                return match_score, data_dict, res, features, word_relevance
-            else:
-                return match_score
+                    match_score = routine.get_match_score(features, lr=lr, reload=reload)
+                else:
+                    match_score = routine.get_match_score(features, reload=reload)
+                match_score_series = pd.Series(0.5, index=df_to_process.id)
+                match_score_series[features.index] = match_score
+                match_score = match_score_series.values
 
+                if return_data:
+                    if lr:
+                        lr = routine.model['LR']
+                        co_df = pd.Series(lr.coef_.squeeze(), index=features.columns)
+                        turn_contrib = FeatureContribution.extract_features_by_attr(word_relevance, routine.cols,
+                                                                                    additive_only=additive_only)
+
+                        # sorted_contrib = turn_contrib.loc[:, features.columns].copy()
+                        # for x in co_df.index:
+                        #     sorted_contrib[x] = sorted_contrib[x] * co_df[x]
+                        # data = sorted_contrib.sum(1).to_numpy().reshape(-1, 1)
+                        data = turn_contrib.loc[:, features.columns].dot(co_df)
+                        word_relevance['token_contribution'] = data
+                    return match_score, data_dict, res, features, word_relevance
+                else:
+                    return match_score
+        else:
+            def predictor_from_decision_unit(decision_unit, routine, return_data=False, lr=False, chunk_size=500,
+                                             reload=False,
+                                             additive_only=self.additive_only):
+                decision_unit = decision_unit.copy()
+                features = routine.feature_extractor.extract_features_by_attr(decision_unit, routine.cols)
+
+                if lr:
+                    match_score = routine.get_match_score(features, lr=lr, reload=reload)
+                else:
+                    match_score = routine.get_match_score(features, reload=reload)
+                match_score_series = pd.Series(0.5, index=features.index)
+                match_score_series[features.index] = match_score
+                match_score = match_score_series.values
+
+                if return_data:
+                    if lr:
+                        lr = routine.model['LR']
+                        co = lr.coef_
+                        co_df = pd.DataFrame(co, columns=routine.features_dict['test'].columns).T
+                        turn_contrib = FeatureContribution.extract_features_by_attr(decision_unit, routine.cols,
+                                                                                    additive_only=additive_only)
+                        for x in co_df.index:
+                            turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+                        data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
+                        decision_unit['token_contribution'] = data
+                    return match_score, features, decision_unit
+                else:
+                    return match_score
+            predictor = predictor_from_decision_unit
         return partial(predictor, routine=self)
 
     def get_calculated_data(self, df_name):
@@ -744,6 +825,7 @@ class Routine:
                                                                     additive_only=self.additive_only, )
         for x in co_df.index:
             turn_contrib[x] = turn_contrib[x] * co_df.loc[x, 0]
+
         data = turn_contrib.sum(1).to_numpy().reshape(-1, 1)
         word_relevance['token_contribution'] = data
         return pred, features, word_relevance
@@ -897,8 +979,40 @@ class Routine:
             plt.xlim(to_plot.index[0] / 2, to_plot.index[-1])
             plt.tight_layout()
         if 4 in operations:  # AOPC
-
             pass
 
         return word_relevance  # res_df_match, res_df_no_match, delta_performance, correlation_data
 
+    @staticmethod
+    def plot_token_contribution(el_df, score_col='token_contribution', cut=0.1):
+        plt.rcParams.update({'font.size': 8})
+
+        tmp_df = el_df.copy()
+        tmp_df = tmp_df.set_index(['left_word', 'right_word'])
+        tmp_df = tmp_df[tmp_df[score_col].abs() >= cut]
+        # colors = ['orange' ] * tmp_df.shape[0]
+        colors = np.where(tmp_df[score_col] >= 0, 'green', 'red')
+
+        g = tmp_df.plot(y=score_col, kind='barh', color=colors, alpha=.5, legend='')
+
+        for p in g.patches:
+            width = p.get_width()
+            offset = 35
+            offset = offset if width > 0 else -offset
+            g.annotate(format(width, '.3f'),
+                       (width, p.get_y()),
+                       ha='right' if width > 0 else 'left',
+                       va='center',
+                       xytext=(offset, 2),
+                       textcoords='offset points')
+
+            plt.ylabel('')
+
+        g.grid(axis='y', color='0.7')
+        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=9)
+        yticks = g.get_yticks()
+        for y0, y1 in zip(yticks[::2], yticks[1::2]):
+            g.axhspan(y0, y1, color='0.7', alpha=0.1, zorder=0)
+        g.set_yticks(yticks)  # force the same yticks again
+        plt.tight_layout()
+        plt.show()
