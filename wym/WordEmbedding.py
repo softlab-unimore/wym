@@ -14,7 +14,7 @@ class WordEmbedding():
 
     def __init__(self, device='auto', verbose=False, model_path='bert-base-uncased', sentence_embedding=False):
         self.sentence_embedding = sentence_embedding
-        self.model = BertModel.from_pretrained(model_path, output_hidden_states=True)
+        self.model = BertModel.from_pretrained(model_path, output_hidden_states=True) # , from_flax=True
         # Set the device to GPU (cuda) if available, otherwise stick with CPU
         if device == 'auto':
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'

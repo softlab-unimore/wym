@@ -1,10 +1,17 @@
 import os
 import sys
+prefix = ''
+if '/home/' in os.path.expanduser('~'):  # UNI env
+    prefix = '/home/baraldian'
+softlab_path = os.path.join(prefix + '/content/drive/Shareddrives/SoftLab/')
+project_path = os.path.join(softlab_path, 'Projects', 'WYM')
+sys.path.append(os.path.join(project_path, 'notebooks'))
+from notebook_import_utility_env import *
 from warnings import simplefilter
 
 from tqdm import tqdm
 
-from Evaluation import *
+from Landmark_github.evaluation.Evaluate_explanation_Batch import *
 
 
 class SoftlabEnv:
@@ -51,7 +58,7 @@ class SoftlabEnv:
             # install here for colab env
         self.softlab_path = os.path.join(prefix + '/content/drive/Shareddrives/SoftLab/')
         self.dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching')
-        self.project_path = os.path.join(self.softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
+        self.project_path = os.path.join(self.softlab_path, 'Projects', 'WYM')
         self.base_files_path = os.path.join(self.project_path, 'dataset_files')
 
     @staticmethod
@@ -76,7 +83,8 @@ class SoftlabEnv:
 
     @staticmethod
     def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', 'left_id', 'right_id', 'label'],
-                    score_col='pred', conf_name='bert', utility='AOPC', k=5, decision_unit_view=True, ):
+                    score_col='pred', conf_name='bert', utility='AOPC', k=5, decision_unit_view=True,
+                    remove_decision_unit_only=False):
         ids = list(df_to_process.id.unique())
         print(f'Testing unit remotion with -- {score_col}')
         assert df_to_process.shape[
@@ -99,7 +107,8 @@ class SoftlabEnv:
         word_relevance_prefix.copy()
         ev = Evaluate_explanation(side_word_relevance_prefix, evaluation_df, predict_method=predictor,
                                   exclude_attrs=exclude_attrs, percentage=.25, num_round=3,
-                                  decision_unit_view=decision_unit_view)
+                                  decision_unit_view=decision_unit_view,
+                                  remove_decision_unit_only=remove_decision_unit_only)
 
         # fixed_side = 'right' if side == 'left' else 'left'
         impacts_all = side_word_relevance_prefix
@@ -172,19 +181,19 @@ class SoftlabEnv:
 class WYMevaluation(SoftlabEnv):
     def __init__(self, additive_only=False):
         super().__init__()
-        self.project_path = os.path.join(self.softlab_path, 'Projects', 'Concept level EM (exclusive-inclluse words)')
+        self.project_path = os.path.join(self.softlab_path, 'Projects', 'WYM')
         self.additive_only = additive_only
         sys.path.append(os.path.join(self.softlab_path, 'Projects/external_github/ditto'))
         sys.path.append(os.path.join(self.softlab_path, 'Projects/external_github'))
         sys.path.append(os.path.join(self.project_path, 'common_functions'))
         sys.path.append(os.path.join(self.project_path, 'src'))
-        sys.path.append(os.path.join(self.project_path, 'src', 'BERT'))
+        sys.path.append(os.path.join(self.project_path, 'src', 'wym'))
 
         # from wrapper.DITTOWrapper import DITTOWrapper
         # from landmark import Landmark
 
     def evaluate_all_df(self, utility='AOPC', explanation='', **kwargs):
-        for df_name in tqdm(self.sorted_dataset_names):
+        for df_name in tqdm(list(self.sorted_dataset_names)):
             gc.collect()
             torch.cuda.empty_cache()
             self.evaluate_single_df(df_name, utility=utility, explanation=explanation, **kwargs)
@@ -194,7 +203,7 @@ class WYMevaluation(SoftlabEnv):
                            we_finetuned=True,  # @param {type:"boolean"},
                            sentence_embedding=False, utility='AOPC', delta=.1, pred_threshold=0.01, k=5, batch_size=256,
                            explanation=''):
-        model_name = 'BERT'
+        model_name = 'wym'
         model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
         routine, predictor = self.init_routine(dataset_name, reset_files, reset_networks, we_finetuned,
                                                sentence_embedding, chunk_size=batch_size)
@@ -221,12 +230,17 @@ class WYMevaluation(SoftlabEnv):
                                        suffix=explanation)
         else:
             decision_unit_view = True
+            remove_decision_unit_only = False
             df_name = 'test'
             pred, features, word_relevance = routine.get_calculated_data(df_name)
             df = routine.test_merged.copy().replace(pd.NA, '')
-            if explanation == 'decision_unit_flat':
+            if 'decision_unit_flat' in explanation:
                 word_relevance = self.explanation_from_decision_unit_to_token(word_relevance, df)
                 decision_unit_view = False
+            elif 'remove_du_only' in explanation:
+                remove_decision_unit_only = True
+                predictor = partial(routine.get_predictor(remove_decision_unit_only=True), return_data=False, lr=True,
+                                    chunk_size=batch_size, reload=True)
 
             match_df, match_ids, no_match_df, no_match_ids = self.get_math_no_match_df(df, pred, delta=delta,
                                                                                        pred_threshold=pred_threshold)
@@ -237,7 +251,8 @@ class WYMevaluation(SoftlabEnv):
             res_df, ev = self.evaluate_df(word_relevance[word_relevance.id.isin(match_ids)],
                                           match_df[match_df.id.isin(match_ids)],
                                           predictor, score_col='token_contribution', k=k, utility=utility,
-                                          decision_unit_view=decision_unit_view
+                                          decision_unit_view=decision_unit_view,
+                                          remove_decision_unit_only=remove_decision_unit_only
                                           )
             self.ev = ev
             self.calculate_save_metric(res_df, model_files_path, metric_name=utility, suffix=explanation)
@@ -248,7 +263,8 @@ class WYMevaluation(SoftlabEnv):
             res_df, ev = self.evaluate_df(word_relevance[word_relevance.id.isin(no_match_ids)],
                                           no_match_df[no_match_df.id.isin(no_match_ids)],
                                           predictor, score_col='token_contribution', k=k, utility=utility,
-                                          decision_unit_view=decision_unit_view
+                                          decision_unit_view=decision_unit_view,
+                                          remove_decision_unit_only=remove_decision_unit_only
                                           )
             self.ev = ev
             self.calculate_save_metric(res_df, model_files_path, metric_name=utility, prefix='no_match',
@@ -256,7 +272,7 @@ class WYMevaluation(SoftlabEnv):
 
     def load_explanations(self, turn_dataset_name, conf='LIME'):
         base_files_path = os.path.join(self.project_path, 'dataset_files')
-        turn_files_path = os.path.join(base_files_path, turn_dataset_name, 'BERT')
+        turn_files_path = os.path.join(base_files_path, turn_dataset_name, 'wym')
 
         tmp_path = os.path.join(turn_files_path, f'negative_explanations_{conf}.csv')
         neg_exp = pd.read_csv(tmp_path)
@@ -269,17 +285,17 @@ class WYMevaluation(SoftlabEnv):
                      reset_networks=False,  # @param {type:"boolean"},
                      we_finetuned=True,  # @param {type:"boolean"},
                      sentence_embedding=False, chunk_size=128, **kwargs):
-        model_name = "BERT"  # @param ["BERT"]
+        model_name = "wym"  # @param ["wym"]
         softlab_path = self.softlab_path
         dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching', dataset_name)
 
-        from BERT.BERTRoutine import Routine
+        from wym.BERTRoutine import Routine
         finetuned_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name, 'sBERT')
 
         routine = Routine(dataset_name, dataset_path, self.project_path, reset_files=reset_files,
                           reset_networks=reset_networks, softlab_path=softlab_path, model_name=model_name,
-                          we_finetuned=we_finetuned, we_finetune_path=finetuned_path, verbose=True,
-                          sentence_embedding=sentence_embedding, device='cpu', **kwargs
+                          we_finetuned=we_finetuned, we_finetune_path=finetuned_path,
+                          sentence_embedding=sentence_embedding, device='cuda', **kwargs
                           )
         routine.additive_only = self.additive_only
         routine.generate_df_embedding(chunk_size=chunk_size)
@@ -289,14 +305,14 @@ class WYMevaluation(SoftlabEnv):
             # batch_size=512, lr=5e-5
         )
         _ = routine.preprocess_word_pairs()
-        _ = routine.EM_modelling(routine.features_dict, routine.words_pairs_dict, routine.train, routine.test,
+        _ = routine.EM_modelling(routine.features_dict, routine.words_pairs_dict, routine.train_merged, routine.test_merged,
                                  do_feature_selection=False)
 
         predictor = partial(routine.get_predictor(), return_data=False, lr=True, chunk_size=chunk_size, reload=True)
         return routine, predictor
 
-    def generate_explanation(self, **kwargs):
-        for df_name in tqdm(self.sorted_dataset_names):
+    def generate_explanation_LIME(self, **kwargs):
+        for df_name in tqdm(list(self.sorted_dataset_names)):
             self.generate_explanation_single_df(df_name, **kwargs)
 
     def generate_explanation_single_df(self, dataset_name="Amazon-Google", reset_files=False,
@@ -305,10 +321,10 @@ class WYMevaluation(SoftlabEnv):
                                        sentence_embedding=False, num_explanations=100,
                                        num_samples=2048, batch_size=256
                                        ):
-        model_name = 'BERT'
+        model_name = 'wym'
         model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
         routine, predictor = self.init_routine(dataset_name, reset_files, reset_networks, we_finetuned,
-                                               sentence_embedding, verbose=False, chunk_size=batch_size)
+                                               sentence_embedding, verbose=True, chunk_size=batch_size)
         test_df = routine.test_merged.copy().replace(pd.NA, '')
         explainer = Landmark(predictor, test_df,
                              exclude_attrs=self.excluded_cols + ['label', 'id'], lprefix='left_', rprefix='right_',
@@ -353,11 +369,11 @@ class DITTOevaluation(SoftlabEnv):
         sys.path.append(github_code_path)
 
     def evaluate_all_df(self, utility='AOPC'):
-        for df_name, task_name in tqdm(zip(self.sorted_dataset_names, self.tasks)):
+        for df_name, task_name in tqdm(list(zip(self.sorted_dataset_names, self.tasks))):
             self.evaluate_single_df(df_name, task_name, utility=utility)
 
     def evaluate_single_df(self, dataset_name="Amazon-Google", task_name=None, utility='AOPC'):
-        model_name = "DITTO"  # @param ["BERT"]
+        model_name = "DITTO"  # @param ["wym"]
         model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
         batch_size = 2048
         num_explanations = 100  # 100
@@ -416,8 +432,54 @@ class DITTOevaluation(SoftlabEnv):
 
 
 if __name__ == "__main__":
+    # Look in '''Evaluation explanation + General training wym''' for more
     # parser = argparse.ArgumentParser()
     # parser.add_argument("--task", type=str, default="Structured/Beer")
 
-    wym_eval = WYMevaluation()
-    wym_eval.evaluate_all_df(utility='degradation')
+
+
+
+    ev = WYMevaluation()
+    ev.evaluate_all_df(utility='AOPC', explanation='last')
+
+    ev = WYMevaluation()
+    ev.evaluate_all_df(utility='sufficiency', explanation='last')
+
+    ev = WYMevaluation()
+    # ev.evaluate_all_df(utility='degradation', reset_files=True, reset_networks=True, explanation='improved')
+    # ev.evaluate_all_df(utility='degradation', explanation='decision_unit_flat', batch_size=512)
+    ev.evaluate_all_df(utility='degradation', explanation='last', batch_size=512)
+
+    # ev = WYMevaluation()
+    # ev.evaluate_all_df(explanation='decision_unit_flat_last')
+
+    # ev = WYMevaluation()
+    # ev.evaluate_all_df(utility='degradation', explanation='remove_du_only')
+
+
+
+    # ev = WYMevaluation(additive_only=True)
+    # ev.additive_only = True
+    # ev.evaluate_all_df(utility='degradation', explanation='additive_only')
+
+    # ev = WYMevaluation()
+    # ev.generate_explanation_LIME() # LIME
+    #
+    # ev = WYMevaluation()
+    # ev.evaluate_all_df(utility='sufficiency', explanation='LIME')
+    # ev = WYMevaluation()
+    # ev.evaluate_all_df(utility='degradation', explanation='LIME')
+
+
+    # DITTOevaluation().evaluate_all_df(utility='sufficiency')
+    # DITTOevaluation().evaluate_all_df(utility='AOPC')
+    # DITTOevaluation().evaluate_all_df(utility='degradation')
+
+
+    # print('-' * 10 + '>' * 5 + 'decision_unit_flat_proportional' + '<' * 5 + '-' * 10)
+    # ev = WYMevaluation()
+    # ev.evaluate_all_df(utility='degradation', explanation='decision_unit_flat_proportional', batch_size=512)
+    #
+    # print('-' * 10 + '>' * 5 + 'proportional' + '<' * 5 + '-' * 10)
+    # ev = WYMevaluation()
+    # ev.evaluate_all_df(utility='degradation', explanation='proportional', batch_size=512)

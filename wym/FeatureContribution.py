@@ -1,10 +1,13 @@
 import numpy as np
 import pandas as pd
+from scipy.special import softmax
 
 from FeatureExtractor import FeatureExtractorGeneral
 
 
 def get_median_index(d):
+    if d.shape[0] == 0:
+        return 0
     ranks = d.rank(pct=True)
     close_to_median = abs(ranks - 0.5)
     return close_to_median.idxmin()
@@ -33,8 +36,7 @@ class FeatureContributionGeneral:
         for col in columns:
             mask = grouped[col + '_left'] < grouped[col + '_right']
             res.append(pd.Series(
-                np.where(mask[df.id],
-                         df[col + '_left'], df[col + '_right']), name=col + '_unpaired_min'))
+                np.where(mask[df.id], df[col + '_left'], df[col + '_right']), name=col + '_unpaired_min'))
             res.append(pd.Series(
                 np.where((~mask)[df.id],
                          df[col + '_left'], df[col + '_right']), name=col + '_unpaired_max'))
@@ -86,12 +88,12 @@ class FeatureContributionGeneral:
                     operator = '_perc'
                     new_col = feature + operator + turn_suffix
                     if feature in ['sum', 'mean', 'count', 'median', 'max', 'min', 'M-m']:
-                        A_grouped = df[matched_mask].groupby('id')[matched_col].agg('sum').replace(0, np.nan)
+                        A_grouped = df[matched_mask].groupby('id')[matched_col].agg('sum').replace(np.nan, 0)
                         A = A_grouped.combine_first(base_index_series).to_numpy()
-                        B_grouped = df[unmatched_mask].groupby('id')[unmatched_col].agg('sum').replace(0, np.nan)
+                        B_grouped = df[unmatched_mask].groupby('id')[unmatched_col].agg('sum').replace(np.nan, 0)
                         B = B_grouped.combine_first(base_index_series).to_numpy()
-                        matched_impact = (A * A + A * B + B * B + 1e-9) / ((A + B) * (A + B) + 1e-9)
-                        unmatched_impact = (B * B + 1e-9) / ((A + B) * (A + B) + 1e-9)
+                        matched_impact = (A * A + A * B + B * B) / ((A + B) * (A + B) + 1e-9)
+                        unmatched_impact = (B * B) / ((A + B) * (A + B) + 1e-9)
                         matched_impact[(unmatched_impact == 1)] = 0
                         unmatched_impact[(unmatched_impact == 1)] = 0
 
@@ -108,8 +110,10 @@ class FeatureContributionGeneral:
                             unmatched_sum = -1 * base_contributions[neg_mask].groupby(df.loc[neg_mask, 'id']).agg(
                                 'sum').combine_first(
                                 base_index_series).to_numpy()
-                        matched_factor = pd.Series(matched_impact / matched_sum, index=base_index_series.index).fillna(0)
-                        unmatched_factor = pd.Series(unmatched_impact / unmatched_sum,
+                        matched_factor = pd.Series(matched_impact / (matched_sum + 1e-9),
+                                                   index=base_index_series.index).fillna(
+                            0)
+                        unmatched_factor = pd.Series(unmatched_impact / (unmatched_sum + 1e-9),
                                                      index=base_index_series.index).fillna(0)
                         # assert unmatched_impact[58] !=0
 
@@ -118,7 +122,7 @@ class FeatureContributionGeneral:
                         df.loc[neg_mask, new_col] = base_contributions[neg_mask].values * unmatched_factor.loc[
                             df[neg_mask].id.values].values
 
-        return df.fillna(0)
+        return df.fillna(0)  # df.describe().loc['max','pred':].max()
 
 
 class FeatureContribution(FeatureContributionGeneral):
@@ -144,11 +148,11 @@ class FeatureContribution(FeatureContributionGeneral):
                                                         additive_only=additive_only)
         tmp_stat.columns = tmp_stat.columns + f'_allattr'
         stat_list.append(tmp_stat)
-
-        return pd.concat(stat_list, 1).fillna(null_value)
+        joined_df = word_pairs_df[['id']].join(stat_list).fillna(null_value)
+        return joined_df.drop('id', 1)
 
     @staticmethod
-    def cycle_features(df_stat_suffix_list, features, rs_col='pred'):
+    def cycle_features(df_stat_suffix_list, features, rs_col='pred', use_softmax='proportional'):
         for df, stat, pair_suffix in df_stat_suffix_list:
             turn_rs_col = rs_col if pair_suffix in ['_paired', '_all'] else 'comp_' + rs_col
             name = 'mean'
@@ -168,15 +172,36 @@ class FeatureContribution(FeatureContributionGeneral):
             df['M-m' + pair_suffix] = 0
             for name in ['max', 'min', 'median']:
                 if name in features:
-                    df[name + pair_suffix] = 0
-                    if 'idx' + name + pair_suffix in stat.columns:
-                        tmp_mask = df.index.isin(stat['idx' + name + pair_suffix].values)
-                        df.loc[tmp_mask, name + pair_suffix] = df.loc[tmp_mask, turn_rs_col]
+                    f = lambda x: softmax(x * 10)
+                    if name == 'min':
+                        f = lambda x: softmax(-x * 10)
+                    if use_softmax is True:
+                        if name != 'median':
+                            weights = df.groupby('id')[turn_rs_col].transform(f)
+                        elif name == 'median':
+                            proportion = - np.abs(df[turn_rs_col] - values)
+                            weights = proportion.groupby(df['id']).transform(f)
+                        values = df.groupby('id')[turn_rs_col].transform(name)
+                        df[name + pair_suffix] = values * weights
+                    elif use_softmax == 'proportional':
+                        values = df.groupby('id')[turn_rs_col].transform(name)
+                        if name in ['min', 'max']:
+                            proportion = df[turn_rs_col] / values
+                        elif name == 'median':
+                            proportion = - np.abs(df[turn_rs_col] - values)
+                        weights = proportion.groupby(df['id']).transform(f)
+
+                        df[name + pair_suffix] = values * weights
+                    else:
+                        df[name + pair_suffix] = 0
+                        if 'idx' + name + pair_suffix in stat.columns:
+                            tmp_mask = df.index.isin(stat['idx' + name + pair_suffix].values)
+                            df.loc[tmp_mask, name + pair_suffix] = df.loc[tmp_mask, turn_rs_col]
             if 'M-m' in features:
                 df['M-m' + pair_suffix] = df['max' + pair_suffix] - df['min' + pair_suffix]
 
     @staticmethod
-    def get_contrib_functions(additive_only=False):
+    def get_contrib_functions(additive_only=False, use_softmax=True):
         if additive_only:
             functions, function_names = FeatureExtractorGeneral.functions_dict['additive']
         else:
@@ -220,12 +245,16 @@ class FeatureContribution(FeatureContributionGeneral):
         stat = FeatureContribution().compute_derived_features(contribution_df, function_names, possible_unpaired=[''],
                                                               additive_only=additive_only)
         columns = np.setdiff1d(stat.columns, list(word_pairs_df.columns) + ['comp_pred'])
-        return stat.loc[:, columns]
+        return stat.loc[:, columns].sort_index()
 
     @staticmethod
     def extract_features(word_pairs_df: pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0,
                          rs_col='pred', scaled=True, additive_only=False):
         functions, function_names = FeatureContribution.get_contrib_functions(additive_only)
+        columns_to_delete = ['left_word', 'right_word', 'cos_sim', 'left_attribute',
+                             'right_attribute', 'label', 'id', 'label_corrected',
+                             'label_corrected_mean', rs_col, 'comp_pred', 'side', 'scaled_p', 'token_contribution']
+        columns_to_delete = np.union1d(columns_to_delete, word_pairs_df.columns)
         word_pairs_df = word_pairs_df.copy()
         all_stat = word_pairs_df.groupby(['id'])[rs_col].agg(functions)
         all_stat.columns += '_all'
@@ -296,9 +325,6 @@ class FeatureContribution(FeatureContributionGeneral):
                                                                            stat_df=count_side_stat,
                                                                            null_value=null_value)
 
-        columns_to_delete = ['left_word', 'right_word', 'cos_sim', 'left_attribute',
-                             'right_attribute', 'label', 'id', 'label_corrected',
-                             'label_corrected_mean', rs_col, 'comp_pred', 'side', 'scaled_p']
         stat = word_pairs_df
         for df in [com_df, non_com_df, exclusive_df, unpaired_both]:
             columns = np.setdiff1d(df.columns, columns_to_delete)

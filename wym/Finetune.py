@@ -36,10 +36,10 @@ def create_cosine_input_format(sentences):
     return samples
 
 
-def finetune_BERT(routine, num_epochs=10, model_save_path=None, train_batch_size=64):
-    sent_train = create_sentence(routine.train.copy())
-    sent_valid = create_sentence(routine.valid.copy())
-    sent_test = create_sentence(routine.test.copy())
+def finetune_BERT(routine, num_epochs=10, model_save_path=None, train_batch_size=32):
+    sent_train = create_sentence(routine.train_merged.copy())
+    sent_valid = create_sentence(routine.valid_merged.copy())
+    sent_test = create_sentence(routine.test_merged.copy())
     train_samples = create_cosine_input_format(sent_train)
     valid_samples = create_cosine_input_format(sent_valid)
     test_samples = create_cosine_input_format(sent_test)
@@ -76,7 +76,8 @@ def finetune_BERT(routine, num_epochs=10, model_save_path=None, train_batch_size
               evaluation_steps=1000,
               warmup_steps=warmup_steps,
               output_path=model_save_path,
-              show_progress_bar=True
+              checkpoint_path= model_save_path,
+              show_progress_bar=True,
               )
     del model
     gc.collect()

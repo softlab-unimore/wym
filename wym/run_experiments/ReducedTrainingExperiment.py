@@ -5,7 +5,7 @@ import numpy as np
 
 def do_reduced_training_experiment(routine, n_repetition=3, train_size_list=[500, 1000, 2000], reset=False):
     print(f'\n\n\nProcessing >>>> {routine.dataset_name}\n\n\n')
-    model_name = 'BERT'
+    model_name = 'wym'
     # Generate dir for reduced training
     reduced_train_general_path = os.path.join(routine.model_files_path, 'Reduced training set')
     try:
@@ -23,7 +23,7 @@ def do_reduced_training_experiment(routine, n_repetition=3, train_size_list=[500
             print(e)
 
         # Sample training
-        df = routine.train
+        df = routine.train_merged
         vc = df['label'].value_counts()
         propotions = {1: vc[1] / (vc[0] + vc[1]), 0:
             vc[0] / (vc[1] + vc[0])}

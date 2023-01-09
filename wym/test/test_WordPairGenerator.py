@@ -28,7 +28,7 @@ class TestWordPairGenerator(TestCase):
         train = pd.read_csv(os.path.join('G:\\Drive condivisi\\SoftLab\\Dataset\\Entity Matching\\BeerAdvo-RateBeer',
                                          'train_merged.csv'))
         self.model_files_path = os.path.join(
-            'G:\\Drive condivisi\\SoftLab\\Projects\\Concept level EM (exclusive-inclluse words)\\dataset_files\\BeerAdvo-RateBeer\\BERT\\')
+            'G:\\Drive condivisi\\SoftLab\\Projects\\Concept level EM (exclusive-inclluse words)\\dataset_files\\BeerAdvo-RateBeer\\wym\\')
         self.embeddings = {}
         self.words = {}
         for df_name in ['table_A', 'table_B']:
