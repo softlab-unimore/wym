@@ -227,7 +227,7 @@ class FeatureContribution(FeatureContributionGeneral):
 
         neg_mask = (word_pairs_df[rs_col] < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
                 word_pairs_df.right_word == '[UNP]')
-        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+        com_df, non_com_df = word_pairs_df[~neg_mask].copy(), word_pairs_df[neg_mask].copy()
 
         if scaled:
             com_df[rs_col] = (com_df[rs_col] - 0.5) * 2
@@ -261,7 +261,7 @@ class FeatureContribution(FeatureContributionGeneral):
 
         neg_mask = (word_pairs_df[rs_col] < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
                 word_pairs_df.right_word == '[UNP]')
-        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+        com_df, non_com_df = word_pairs_df[~neg_mask].copy(), word_pairs_df[neg_mask].copy()
 
         if scaled:
             com_df[rs_col] = (com_df[rs_col] - 0.5) * 2
@@ -273,8 +273,8 @@ class FeatureContribution(FeatureContributionGeneral):
         tmp = non_com_df
         tmp['comp_pred'] = (1 - tmp[rs_col]) if complementary else tmp[rs_col]
         tmp['side'] = np.where((tmp.left_word == '[UNP]') | (tmp.right_word == '[UNP]'), 'exclusive', 'both')
-        unpaired_exclusive = tmp[tmp['side'] == 'exclusive']
-        unpaired_both = tmp[tmp['side'] == 'both']
+        unpaired_exclusive = tmp[tmp['side'] == 'exclusive'].copy()
+        unpaired_both = tmp[tmp['side'] == 'both'].copy()
         stat = tmp.groupby(['id', 'side'])['comp_pred'].agg(functions)
         unpaired_stat = stat.unstack(1)
         unpaired_stat.columns = ['_unpaired_'.join(col) for col in unpaired_stat.columns]
@@ -291,8 +291,8 @@ class FeatureContribution(FeatureContributionGeneral):
         tmp = non_com_df[(non_com_df.left_word == '[UNP]') | (non_com_df.right_word == '[UNP]')].copy()
         tmp['comp_pred'] = (1 - tmp[rs_col]) if complementary else tmp[rs_col]
         tmp['side'] = np.where((tmp.left_word == '[UNP]'), 'left', 'right')
-        exclusive_df_left = tmp[tmp['side'] == 'left']
-        exclusive_df_right = tmp[tmp['side'] == 'right']
+        exclusive_df_left = tmp[tmp['side'] == 'left'].copy()
+        exclusive_df_right = tmp[tmp['side'] == 'right'].copy()
 
         count_side_stat = (tmp.groupby(['id', 'side'])['comp_pred']).agg(functions)
         count_side_stat = count_side_stat.unstack(1)

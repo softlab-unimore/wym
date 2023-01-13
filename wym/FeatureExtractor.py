@@ -102,7 +102,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
 
         neg_mask = (word_pairs_df.pred < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
                 word_pairs_df.right_word == '[UNP]')
-        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+        com_df, non_com_df = word_pairs_df.loc[~neg_mask, :].copy(), word_pairs_df.loc[neg_mask, :].copy()
 
         if scaled:
             com_df['pred'] = (com_df['pred'] - 0.5) * 2
@@ -152,7 +152,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
 
         neg_mask = (word_pairs_df.pred < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
                 word_pairs_df.right_word == '[UNP]')
-        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+        com_df, non_com_df = word_pairs_df[~neg_mask].copy(), word_pairs_df[neg_mask].copy()
 
         if scaled:
             com_df['pred'] = (com_df['pred'] - 0.5) * 2
@@ -226,7 +226,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
 
         neg_mask = (word_pairs_df.pred < pos_threshold) | (word_pairs_df.left_word == '[UNP]') | (
                 word_pairs_df.right_word == '[UNP]')
-        com_df, non_com_df = word_pairs_df[~neg_mask], word_pairs_df[neg_mask]
+        com_df, non_com_df = word_pairs_df[~neg_mask].copy(), word_pairs_df[neg_mask].copy()
 
         if scaled:
             com_df['pred'] = (com_df['pred'] - 0.5) * 2
