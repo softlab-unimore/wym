@@ -2,7 +2,7 @@ import gc
 
 import numpy as np
 import torch
-from tqdm.notebook import tqdm
+from tqdm.autonotebook import tqdm
 from transformers import BertModel, BertTokenizer
 import copy
 
@@ -154,20 +154,20 @@ class WordEmbedding():
                     sentences_emb.append(tmp_sentences[index].to('cpu'))
                 index += 1
 
-        words_cutted = []
-        emb_cutted = []
+        words_cut = []
+        emb_cut = []
         for i, word_list in enumerate(words):
             last_index = word_list.index('[SEP]')
-            words_cutted.append(word_list[:last_index])
-            emb_cutted.append(emb_all[i][:last_index].cpu())
+            words_cut.append(word_list[:last_index])
+            emb_cut.append(emb_all[i][:last_index].cpu())
             # assert len(word_list[:last_index])> 0
-        emb_all = np.array(emb_cutted, dtype=object)
+        emb_all = np.array(emb_cut, dtype=object)
 
         if self.sentence_embedding:
             sentences_emb = np.array(sentences_emb, dtype=object)
-            return emb_all, words_cutted, sentences_emb
+            return emb_all, words_cut, sentences_emb
         else:
-            return emb_all, words_cutted
+            return emb_all, words_cut
 
     def generate_embedding(self, df, chunk_size=500):
         emb_list, words_list, sent_emb_list = [], [], []

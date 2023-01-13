@@ -5,8 +5,7 @@ from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 import torch
-from tqdm.notebook import tqdm
-
+from tqdm.autonotebook import tqdm
 from StableMarriage import gale_shapley
 
 

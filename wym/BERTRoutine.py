@@ -29,8 +29,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
-from tqdm.notebook import tqdm
-
+from tqdm.autonotebook import tqdm
 from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
 from FeatureContribution import FeatureContribution
 from FeatureExtractor import FeatureExtractor
@@ -754,7 +753,7 @@ class Routine:
                     df_to_process['id'] = df_to_process.index
                 gc.collect()
                 torch.cuda.empty_cache()
-                data_dict = routine.get_processed_data(df_to_process, chunk_size=chunk_size)
+                data_dict = routine.get_processed_data(df_to_process, batch_size=chunk_size)
                 res = routine.get_word_pairs(df_to_process, data_dict)
                 features, word_relevance = routine.get_relevance_scores_and_features(*res)
 

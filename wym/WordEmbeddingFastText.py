@@ -1,7 +1,7 @@
 import gc
 import numpy as np
 import torch
-from tqdm.notebook import tqdm
+from tqdm.autonotebook import tqdm
 from transformers import BertModel, BertTokenizer
 
 

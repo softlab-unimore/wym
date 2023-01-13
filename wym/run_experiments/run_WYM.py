@@ -2,7 +2,7 @@ from notebook_import_utility_env import *
 import pickle
 from copy import deepcopy
 
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 
 from dataset_names import sorted_dataset_names
 import os
@@ -46,7 +46,7 @@ def run_pipeline(dataset_name, routine):
         #     df_to_process['id'] = df_to_process.index
         # check if removable
         a = datetime.now()
-        res_dict = routine.get_processed_data(df_to_process, chunk_size=chunk_size)
+        res_dict = routine.get_processed_data(df_to_process, batch_size=chunk_size)
         time_dict.update(phase='embedding-generation', time=(datetime.now() - a).total_seconds())
         time_list_dict.append(time_dict.copy())
 
@@ -71,10 +71,10 @@ def run_pipeline(dataset_name, routine):
         routine.verbose = True
         if name == 'train':
             a = datetime.now()
-            _ = routine.net_train(word_pairs=dataset_data_dict['train']['word_pairs'],
-                                  emb_pairs=dataset_data_dict['train']['emb_pairs'],
-                                  valid_pairs=dataset_data_dict['valid']['word_pairs'],
-                                  valid_emb=dataset_data_dict['valid']['emb_pairs'])
+            _ = routine.net_train(train_word_pairs=dataset_data_dict['train']['word_pairs'],
+                                  train_emb_pairs=dataset_data_dict['train']['emb_pairs'],
+                                  valid_word_pairs=dataset_data_dict['valid']['word_pairs'],
+                                  valid_emb_pairs=dataset_data_dict['valid']['emb_pairs'])
             # lr=2e-5, num_epochs=25) # batch_size=128, lr=1e-5
             time_dict.update(phase='train_relevance_net', time=(datetime.now() - a).total_seconds())
             time_list_dict.append(time_dict.copy())

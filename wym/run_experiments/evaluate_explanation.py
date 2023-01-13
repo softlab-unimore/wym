@@ -9,7 +9,7 @@ sys.path.append(os.path.join(project_path, 'notebooks'))
 from notebook_import_utility_env import *
 from warnings import simplefilter
 
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 
 from Landmark_github.evaluation.Evaluate_explanation_Batch import *
 
