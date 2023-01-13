@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm.autonotebook import tqdm
-from StableMarriage import gale_shapley
+from .StableMarriage import gale_shapley
 
 
 class EMFeatures:

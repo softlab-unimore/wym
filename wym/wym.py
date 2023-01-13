@@ -26,11 +26,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from FeatureContribution import FeatureContribution
-from FeatureExtractor import FeatureExtractor
-from Net import DatasetAccoppiate, NetAccoppiate, train_model
-from WordEmbedding import WordEmbedding
-from WordPairGenerator import WordPairGenerator
+from .FeatureContribution import FeatureContribution
+from .FeatureExtractor import FeatureExtractor
+from .Net import DatasetAccoppiate, NetAccoppiate, train_model
+from .WordEmbedding import WordEmbedding
+from .WordPairGenerator import WordPairGenerator
 
 
 class Wym:

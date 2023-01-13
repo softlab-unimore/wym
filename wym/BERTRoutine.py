@@ -31,13 +31,13 @@ from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.autonotebook import tqdm
 from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
-from FeatureContribution import FeatureContribution
-from FeatureExtractor import FeatureExtractor
-from Finetune import finetune_BERT
-from Modelling import feature_importance
-from Net import DatasetAccoppiate, NetAccoppiate, train_model
-from WordEmbedding import WordEmbedding
-from WordPairGenerator import WordPairGenerator, WordPairGeneratorEdit
+from .FeatureContribution import FeatureContribution
+from .FeatureExtractor import FeatureExtractor
+from .Finetune import finetune_BERT
+from .Modelling import feature_importance
+from .Net import DatasetAccoppiate, NetAccoppiate, train_model
+from .WordEmbedding import WordEmbedding
+from .WordPairGenerator import WordPairGenerator, WordPairGeneratorEdit
 
 
 class Routine:

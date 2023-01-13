@@ -4,7 +4,8 @@ from IPython.display import display
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.metrics import f1_score
-from tqdm.autonotebook import tqdmfrom sklearn.model_selection import StratifiedKFold
+from tqdm.autonotebook import tqdm
+from sklearn.model_selection import StratifiedKFold
 from copy import deepcopy
 
 

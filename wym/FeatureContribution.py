@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import softmax
 
-from FeatureExtractor import FeatureExtractorGeneral
+from .FeatureExtractor import FeatureExtractorGeneral
 
 
 def get_median_index(d):
