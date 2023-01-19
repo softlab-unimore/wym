@@ -282,7 +282,7 @@ class Routine:
                 [
                     768]), f'Sentence emb has shape: {self.sentence_embedding_dict["table_A"][0].shape}. It must be [768]!'
 
-    def get_processed_data(self, df, chunk_size=500, verbose=False):
+    def get_processed_data(self, df, batch_size=500, verbose=False):
         we = self.we
         res = {}
         for side in ['left', 'right']:
@@ -296,10 +296,10 @@ class Routine:
             res[side + '_word_map'] = WordPairGenerator.map_word_to_attr(tmp_df, self.cols, prefix=prefix,
                                                                          verbose=self.verbose)
             if self.sentence_embedding:
-                emb, words, sentence_emb = we.generate_embedding(tmp_df, chunk_size=chunk_size)
+                emb, words, sentence_emb = we.generate_embedding(tmp_df, chunk_size=batch_size)
                 res[side + '_sentence_emb'] = sentence_emb
             else:
-                emb, words = we.generate_embedding(tmp_df, chunk_size=chunk_size)
+                emb, words = we.generate_embedding(tmp_df, chunk_size=batch_size)
 
             res[side + '_emb'] = emb
             res[side + '_words'] = words

@@ -1,16 +1,17 @@
 import os
 import sys
+
 prefix = ''
 if '/home/' in os.path.expanduser('~'):  # UNI env
     prefix = '/home/baraldian'
 softlab_path = os.path.join(prefix + '/content/drive/Shareddrives/SoftLab/')
 project_path = os.path.join(softlab_path, 'Projects', 'WYM')
 sys.path.append(os.path.join(project_path, 'notebooks'))
-from notebook_import_utility_env import *
+
+from wym.notebook_import_utility_env import *
 from warnings import simplefilter
 
 from tqdm.autonotebook import tqdm
-
 from Landmark_github.evaluation.Evaluate_explanation_Batch import *
 
 
@@ -284,8 +285,8 @@ class WYMevaluation(SoftlabEnv):
     def init_routine(self, dataset_name="Amazon-Google", reset_files=False,
                      reset_networks=False,  # @param {type:"boolean"},
                      we_finetuned=True,  # @param {type:"boolean"},
-                     sentence_embedding=False, chunk_size=128, **kwargs):
-        model_name = "wym"  # @param ["wym"]
+                     sentence_embedding=False, chunk_size=128, model_name="BERT", **kwargs):
+        # @param ["wym"]
         softlab_path = self.softlab_path
         dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching', dataset_name)
 
@@ -305,7 +306,8 @@ class WYMevaluation(SoftlabEnv):
             # batch_size=512, lr=5e-5
         )
         _ = routine.preprocess_word_pairs()
-        _ = routine.EM_modelling(routine.features_dict, routine.words_pairs_dict, routine.train_merged, routine.test_merged,
+        _ = routine.EM_modelling(routine.features_dict, routine.words_pairs_dict, routine.train_merged,
+                                 routine.test_merged,
                                  do_feature_selection=False)
 
         predictor = partial(routine.get_predictor(), return_data=False, lr=True, chunk_size=chunk_size, reload=True)
@@ -432,12 +434,13 @@ class DITTOevaluation(SoftlabEnv):
 
 
 if __name__ == "__main__":
+    ev = WYMevaluation()
+    ev.evaluate_single_df('iTunes-Amazon', utility='all', explanation='to_delete', reset_files=True)
+
+
     # Look in '''Evaluation explanation + General training wym''' for more
     # parser = argparse.ArgumentParser()
     # parser.add_argument("--task", type=str, default="Structured/Beer")
-
-
-
 
     ev = WYMevaluation()
     ev.evaluate_all_df(utility='AOPC', explanation='last')
@@ -456,8 +459,6 @@ if __name__ == "__main__":
     # ev = WYMevaluation()
     # ev.evaluate_all_df(utility='degradation', explanation='remove_du_only')
 
-
-
     # ev = WYMevaluation(additive_only=True)
     # ev.additive_only = True
     # ev.evaluate_all_df(utility='degradation', explanation='additive_only')
@@ -470,11 +471,9 @@ if __name__ == "__main__":
     # ev = WYMevaluation()
     # ev.evaluate_all_df(utility='degradation', explanation='LIME')
 
-
     # DITTOevaluation().evaluate_all_df(utility='sufficiency')
     # DITTOevaluation().evaluate_all_df(utility='AOPC')
     # DITTOevaluation().evaluate_all_df(utility='degradation')
-
 
     # print('-' * 10 + '>' * 5 + 'decision_unit_flat_proportional' + '<' * 5 + '-' * 10)
     # ev = WYMevaluation()
