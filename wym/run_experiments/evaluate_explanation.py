@@ -204,7 +204,7 @@ class WYMevaluation(SoftlabEnv):
                            we_finetuned=True,  # @param {type:"boolean"},
                            sentence_embedding=False, utility='AOPC', delta=.1, pred_threshold=0.01, k=5, batch_size=256,
                            explanation=''):
-        model_name = 'wym'
+        model_name = 'BERT'
         model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
         routine, predictor = self.init_routine(dataset_name, reset_files, reset_networks, we_finetuned,
                                                sentence_embedding, chunk_size=batch_size)
@@ -323,7 +323,7 @@ class WYMevaluation(SoftlabEnv):
                                        sentence_embedding=False, num_explanations=100,
                                        num_samples=2048, batch_size=256
                                        ):
-        model_name = 'wym'
+        model_name = 'BERT'
         model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
         routine, predictor = self.init_routine(dataset_name, reset_files, reset_networks, we_finetuned,
                                                sentence_embedding, verbose=True, chunk_size=batch_size)
@@ -435,7 +435,7 @@ class DITTOevaluation(SoftlabEnv):
 
 if __name__ == "__main__":
     ev = WYMevaluation()
-    ev.evaluate_single_df('iTunes-Amazon', utility='all', explanation='to_delete', reset_files=True)
+    ev.evaluate_single_df('iTunes-Amazon', utility='all', explanation='to_delete', reset_files=False)
 
 
     # Look in '''Evaluation explanation + General training wym''' for more
