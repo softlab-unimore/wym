@@ -84,7 +84,7 @@ class SoftlabEnv:
 
     @staticmethod
     def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', 'left_id', 'right_id', 'label'],
-                    score_col='pred', conf_name='bert', utility='AOPC', k=5, decision_unit_view=True,
+                    score_col='token_contribution', conf_name='bert', utility='AOPC', k=5, decision_unit_view=True,
                     remove_decision_unit_only=False):
         ids = list(df_to_process.id.unique())
         print(f'Testing unit remotion with -- {score_col}')
