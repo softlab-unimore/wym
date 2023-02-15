@@ -1,6 +1,6 @@
 # WYM
 
-Explainable classification systems generate predictions along with a weight for each term in the input record measuring its contribution to the prediction.
+An Explainable classification systems generate predictions along with a weight for each pair of term (decision unit) in the input record measuring its contribution to the prediction.
 In the entity matching (EM) scenario, inputs are pairs of entity descriptions and the resulting explanations can be difficult to understand for the users.
 They can be very long and assign different impacts to similar terms located in different descriptions.
 
