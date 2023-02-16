@@ -20,7 +20,12 @@ exec(open(os.path.join(project_path,'notebook_import_utility_env.py')).read())
 # simplefilter(action='ignore', category=FutureWarning)
 # simplefilter(action='ignore')
 
-global prefix
+import os
+import sys
+from .import_utility import check_pathc_exist, prefix
+import pandas as pd
+import numpy as np
+from IPython.core.interactiveshell import InteractiveShell
 
 softlab_path = os.path.join(prefix, 'content/drive/Shareddrives/SoftLab')
 project_path = os.path.join(softlab_path, 'Projects', 'WYM')
