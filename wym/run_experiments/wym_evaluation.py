@@ -72,7 +72,7 @@ class SoftlabEnv:
         for side in ['left', 'right']:
             side_columns = wr.columns[wr.columns.str.startswith(side)].to_list()
             token_impact = wr.loc[:, ['id', 'label', 'token_contribution'] + side_columns]
-            token_impact.columns = token_impact.columns.str.replace(side + '_', '')
+            token_impact.columns = token_impact.columns.str.replace(side + '_', '') # convert side column to flat
             token_impact = token_impact[token_impact['word'] != '[UNP]']
             token_impact['attribute'] = side + '_' + token_impact['attribute']
 
@@ -100,10 +100,10 @@ class SoftlabEnv:
         word_relevance_prefix['conf'] = conf_name
 
         word_relevance_prefix = word_relevance_prefix.copy()
-        ev = Evaluate_explanation(word_relevance_prefix, evaluation_df, predict_method=predictor,
-                                  exclude_attrs=exclude_attrs, percentage=.25, num_round=3,
+        ev = Evaluate_explanation(evaluation_df, word_relevance_prefix, percentage=.25, num_round=3,
                                   decision_unit_view=decision_unit_view,
-                                  remove_decision_unit_only=remove_decision_unit_only)
+                                  remove_decision_unit_only=remove_decision_unit_only, predict_method=predictor,
+                                  exclude_attrs=exclude_attrs)
         impacts_all = word_relevance_prefix
         impact_df = impacts_all[impacts_all.id.isin(ids)]
         start_el = df_to_process[df_to_process.id.isin(ids)]
