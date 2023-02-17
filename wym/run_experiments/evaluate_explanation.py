@@ -49,13 +49,11 @@ class SoftlabEnv:
         simplefilter(action='ignore', category=FutureWarning)
         simplefilter(action='ignore')
         pd.options.display.float_format = '{:.4f}'.format
-        prefix = ''
         self.excluded_cols = ['id', 'left_id', 'right_id']  # ['']
-        if os.path.expanduser('~') == '/home/baraldian':  # UNI env
-            prefix = '/home/baraldian'
+        if '/home/' in os.path.expanduser('~'):  # UNI env
+            prefix = os.path.expanduser('~')
         else:
-            from google.colab import drive
-            drive.mount('/content/drive')
+            prefix = '.'
             # install here for colab env
         self.softlab_path = os.path.join(prefix + '/content/drive/Shareddrives/SoftLab/')
         self.dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching')
@@ -63,35 +61,38 @@ class SoftlabEnv:
         self.base_files_path = os.path.join(self.project_path, 'dataset_files')
 
     @staticmethod
-    def explanation_from_decision_unit_to_token(word_relevance, df):
-        wr = append_prefix(word_relevance, df, decision_unit_view=True)
+    def explanation_from_decision_unit_to_token(em_df, word_relevance, impact_col: str='token_contribution'):
+        if impact_col not in word_relevance.columns:
+            raise ValueError(f"Missing column {impact_col} in dataframe.")
 
-        df_list = []
-        wr['token_contribution'] = np.where((wr['left_word'] != '[UNP]') & (wr['right_word'] != '[UNP]'),
-                                            wr['token_contribution'] / 2, wr['token_contribution'])
+        wr = append_prefix(em_df, word_relevance, decision_unit_view=True)
+
+        df_list = list()
+        wr[impact_col] = np.where((wr['left_word'] != '[UNP]') & (wr['right_word'] != '[UNP]'),
+                                            wr[impact_col] / 2, wr[impact_col])
         for side in ['left', 'right']:
             side_columns = wr.columns[wr.columns.str.startswith(side)].to_list()
-            token_impact = wr.loc[:, ['id', 'label', 'token_contribution'] + side_columns]
+            token_impact = wr.loc[:, ['id', 'label', impact_col] + side_columns]
             token_impact.columns = token_impact.columns.str.replace(side + '_', '')
             token_impact = token_impact[token_impact['word'] != '[UNP]']
             token_impact['attribute'] = side + '_' + token_impact['attribute']
 
             df_list.append(token_impact)
         wr_flat = pd.concat(df_list, 0).reset_index(drop=True)
-        wr_flat = wr_flat.rename(columns={'word_prefixes': 'word_prefix'})
+        wr_flat = wr_flat.rename(columns={'word_prefixes': 'word_prefix', impact_col: 'impact'})
         assert 'word_prefix' in wr_flat.columns
         return wr_flat
 
     @staticmethod
-    def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=['id', 'left_id', 'right_id', 'label'],
+    def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=('id', 'left_id', 'right_id', 'label'),
                     score_col='pred', conf_name='bert', utility='AOPC', k=5, decision_unit_view=True,
                     remove_decision_unit_only=False):
         ids = list(df_to_process.id.unique())
-        print(f'Testing unit remotion with -- {score_col}')
+        print(f'Testing unit removal with -- {score_col}')
         assert df_to_process.shape[
                    0] > 0, f'DataFrame to evaluate must have some elements. Passed df has shape {df_to_process.shape[0]}'
         evaluation_df = df_to_process.copy().replace(pd.NA, '')
-        word_relevance_prefix = append_prefix(word_relevance, evaluation_df, decision_unit_view=decision_unit_view,
+        word_relevance_prefix = append_prefix(evaluation_df, word_relevance, decision_unit_view=decision_unit_view,
                                               exclude_attrs=exclude_attrs)
         if score_col == 'pred':
             word_relevance_prefix['impact'] = word_relevance_prefix[score_col] - 0.5
@@ -106,10 +107,10 @@ class SoftlabEnv:
         # side_word_relevance_prefix['word_prefix'] = side_word_relevance_prefix[side + '_word_prefixes']
         # side_word_relevance_prefix = side_word_relevance_prefix.query(f'{side}_word != "[UNP]"')
         word_relevance_prefix.copy()
-        ev = Evaluate_explanation(side_word_relevance_prefix, evaluation_df, predict_method=predictor,
-                                  exclude_attrs=exclude_attrs, percentage=.25, num_round=3,
-                                  decision_unit_view=decision_unit_view,
-                                  remove_decision_unit_only=remove_decision_unit_only)
+        ev = EvaluateExplanation(side_word_relevance_prefix, evaluation_df, predict_method=predictor,
+                                 exclude_attrs=exclude_attrs, percentage=.25, num_round=3,
+                                 decision_unit_view=decision_unit_view,
+                                 remove_decision_unit_only=remove_decision_unit_only)
 
         # fixed_side = 'right' if side == 'left' else 'left'
         impacts_all = side_word_relevance_prefix
@@ -128,7 +129,7 @@ class SoftlabEnv:
         return pd.concat(res_list), ev
 
     @staticmethod
-    def get_math_no_match_df(df, pred, delta=0.1, pred_threshold=0.01):
+    def get_match_no_match_df(df, pred, delta=0.1, pred_threshold=0.01):
         # match_df = df[pred > .5 + delta]
         match_df = df[df.label > .5]
         sample_len = min(100, match_df.shape[0])
@@ -236,15 +237,15 @@ class WYMevaluation(SoftlabEnv):
             pred, features, word_relevance = routine.get_calculated_data(df_name)
             df = routine.test_merged.copy().replace(pd.NA, '')
             if 'decision_unit_flat' in explanation:
-                word_relevance = self.explanation_from_decision_unit_to_token(word_relevance, df)
+                word_relevance = self.explanation_from_decision_unit_to_token(df, word_relevance)
                 decision_unit_view = False
             elif 'remove_du_only' in explanation:
                 remove_decision_unit_only = True
                 predictor = partial(routine.get_predictor(remove_decision_unit_only=True), return_data=False, lr=True,
                                     chunk_size=batch_size, reload=True)
 
-            match_df, match_ids, no_match_df, no_match_ids = self.get_math_no_match_df(df, pred, delta=delta,
-                                                                                       pred_threshold=pred_threshold)
+            match_df, match_ids, no_match_df, no_match_ids = self.get_match_no_match_df(df, pred, delta=delta,
+                                                                                        pred_threshold=pred_threshold)
 
             # predictor = lambda x : [0.5]*x.shape[0]
             print('Before')
@@ -435,8 +436,9 @@ class DITTOevaluation(SoftlabEnv):
 
 if __name__ == "__main__":
     ev = WYMevaluation()
-    ev.evaluate_single_df('iTunes-Amazon', utility='all', explanation='to_delete', reset_files=False)
+    ev.evaluate_single_df('iTunes-Amazon', utility=True, explanation='to_delete', reset_files=False)
 
+    exit(0)
 
     # Look in '''Evaluation explanation + General training wym''' for more
     # parser = argparse.ArgumentParser()
