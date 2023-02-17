@@ -57,7 +57,36 @@ class Wym:
         self.we = WordEmbedding(device=self.device, verbose=True, model_path=we_finetune_path)
         self.feature_extractor = FeatureExtractor()
 
-    def spilt_X_y(self, df, label_column_name='label'):
+    @staticmethod
+    def convert_token_contribution_to_impact(du_contributions: np.array, bias: np.array) -> np.array:
+        e = np.exp
+        softmax = lambda x: e(x) / sum(e(x))
+
+        all_contrib = np.concatenate([du_contributions, bias])
+        impacts = np.zeros_like(all_contrib)
+
+        pos_mask = all_contrib >= 0
+
+        pos_contrib = all_contrib[pos_mask]
+        neg_contrib = all_contrib[~pos_mask]
+
+        pos_sum = pos_contrib.sum()
+        neg_sum = neg_contrib.sum()
+
+        tot_sum = pos_sum + neg_sum
+
+        pred_pos = ((e(tot_sum) * pos_sum) /
+                    ((e(tot_sum) + 1) * tot_sum))
+
+        pred_neg = ((e(tot_sum) * neg_sum) /
+                    ((e(tot_sum) + 1) * tot_sum))
+
+        impacts[pos_mask] = softmax(pos_contrib) * pred_pos
+        impacts[~pos_mask] = softmax(neg_contrib) * pred_neg
+
+        return impacts
+
+    def split_X_y(self, df, label_column_name='label'):
         return df[self.columns_to_use], df[label_column_name]
 
     def get_processed_data(self, df, batch_size=None, verbose=False):
@@ -147,7 +176,7 @@ class Wym:
                      do_evaluation=False, do_feature_selection=False, results_path='results'):
         if self.additive_only and results_path == 'results':
             results_path = 'results_additive'
-        if hasattr(self, 'models') == False:
+        if not hasattr(self, 'models'):
             mmScaler = MinMaxScaler()
             mmScaler.clip = False
             self.models = [
@@ -335,6 +364,10 @@ class Wym:
         g.set_yticks(yticks)  # force the same yticks again
         plt.tight_layout()
         plt.show()
+
+    def generate_counterfactual(self, desc_df) -> pd.DataFrame:
+        match_score, data_dict, word_pairs, emb_pairs, features, word_relevance = self.predict(X_test, return_data=True)
+
 
 
 if __name__ == '__main__':

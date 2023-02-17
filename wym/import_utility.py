@@ -68,8 +68,7 @@ else:
     prefix = '.'
 
 if in_notebook():
+    print("Jupyter Notebook detected.")
     from wym.notebook_import_utility_env import *
-    from IPython.core.interactiveshell import InteractiveShell
-    from IPython.utils import io
 else:
     from wym.import_utility_env import *
