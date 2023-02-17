@@ -81,13 +81,11 @@ class Routine:
             self.model_files_path = model_files_path
         try:
             os.makedirs(self.model_files_path)
-        except Exception as e:
-            print(e)
+        except FileExistsError:
             pass
         try:
             os.makedirs(os.path.join(self.model_files_path, 'results'))
-        except Exception as e:
-            print(e)
+        except FileExistsError:
             pass
         self.experiments = {}
         sys.path.append(os.path.join(project_path, 'common_functions'))
@@ -602,8 +600,7 @@ class Routine:
         res_df.index.name = 'model_name'
         try:
             os.makedirs(os.path.join(self.model_files_path, results_path))
-        except Exception as e:
-            print(e)
+        except FileExistsError:
             pass
         res_df.to_csv(os.path.join(self.model_files_path, results_path, 'performances.csv'))
         display(res_df)
