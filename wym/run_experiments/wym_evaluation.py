@@ -108,9 +108,9 @@ class SoftlabEnv:
         # side_word_relevance_prefix = side_word_relevance_prefix.query(f'{side}_word != "[UNP]"')
         word_relevance_prefix.copy()
         ev = EvaluateExplanation(side_word_relevance_prefix, evaluation_df, predict_method=predictor,
-                                 exclude_attrs=exclude_attrs, percentage=.25, num_round=3,
-                                 decision_unit_view=decision_unit_view,
-                                 remove_decision_unit_only=remove_decision_unit_only)
+                                 exclude_attrs=exclude_attrs, percentage=.25, num_rounds=3,
+                                 evaluate_removing_du=decision_unit_view,
+                                 recompute_embeddings=remove_decision_unit_only)
 
         # fixed_side = 'right' if side == 'left' else 'left'
         impacts_all = side_word_relevance_prefix
