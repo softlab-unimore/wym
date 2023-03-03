@@ -30,7 +30,7 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.autonotebook import tqdm
-from Landmark_github.evaluation.Evaluate_explanation_Batch import correlation_vs_landmark, token_remotion_delta_performance
+from Landmark_github.evaluation.Evaluate_explanation_Batch import correlation_vs_landmark, token_removal_delta_performance
 # from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df
 from .FeatureContribution import FeatureContribution
 from .FeatureExtractor import FeatureExtractor
@@ -861,14 +861,14 @@ class Routine:
         no_match_ids = no_match_df.id.sample(sample_len).values
         self.ev_df['nomatch'] = no_match_df[no_match_df.id.isin(no_match_ids)]
         if 0 in operations:
-            # token_remotion_delta_performance
+            # token_removal_delta_performance
             tmp_path = os.path.join(self.model_files_path, 'results',
                                     f'{score_col}__evaluation_token_remotion_delta_performance.csv')
             if reset is False and os.path.isfile(tmp_path):
                 delta_performance = pd.read_csv(tmp_path)
             else:
-                delta_performance = token_remotion_delta_performance(df, df.label.values.astype(int), word_relevance,
-                                                                     predictor, plot=plot, score_col=score_col)
+                delta_performance = token_removal_delta_performance(df, df.label.values.astype(int), word_relevance,
+                                                                    predictor, plot=plot, score_col=score_col)
                 delta_performance.to_csv(
                     tmp_path)
             display(delta_performance)
