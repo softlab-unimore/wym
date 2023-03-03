@@ -30,7 +30,8 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.autonotebook import tqdm
-from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
+from Landmark_github.evaluation.Evaluate_explanation_Batch import correlation_vs_landmark, token_remotion_delta_performance
+# from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df
 from .FeatureContribution import FeatureContribution
 from .FeatureExtractor import FeatureExtractor
 from .Finetune import finetune_BERT
@@ -322,9 +323,9 @@ class Routine:
                     tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
                     with open(tmp_path, 'rb') as file:
                         self.sentence_emb_pairs_dict[df_name] = pickle.load(file)
-            print('Loaded word pairs')
-        except Exception as e:
-            print(e)
+            print('Loaded word pairs.')
+        except FileNotFoundError as e:
+            print(f"File {e.filename} not found. Recomputing...")
 
             if word_sim:
                 word_pair_generator = WordPairGeneratorEdit(df=self.test_merged, use_schema=use_schema, device=self.device,
@@ -737,10 +738,10 @@ class Routine:
 
         return feat, word_pairs
 
-    def get_predictor(self, remove_decision_unit_only=False):
+    def get_predictor(self, recompute_embeddings=True):
         self.reset_networks = False
         self.net_train()
-        if remove_decision_unit_only is False:
+        if recompute_embeddings:
             def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False,
                           additive_only=self.additive_only):
 
@@ -880,10 +881,12 @@ class Routine:
                     os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_no_match_mean_delta.csv')):
                 pass
             else:
+                # TODO: edit this branch to use evaluate_df from WYM correctly
+                from wym.run_experiments.wym_evaluation import WYMEvaluation
+                ev = WYMEvaluation(dataset_df=df, evaluate_removing_du=True, recompute_embeddings=True,
+                                   variable_side='all', fixed_side='all', evaluate_positive=True)
                 # Evaluate impacts with words remotion
-                res_df = evaluate_df(word_relevance[word_relevance.id.isin(match_ids)],
-                                     match_df[match_df.id.isin(match_ids)],
-                                     predictor, score_col=score_col)
+                res_df = ev.evaluate_df(score_col=score_col)
 
                 res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
                 self.experiments['exp1_match'] = res_df
@@ -896,9 +899,7 @@ class Routine:
                 match_stat.to_csv(
                     os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_match_mean_delta.csv'))
 
-                res_df = evaluate_df(word_relevance[word_relevance.id.isin(no_match_ids)],
-                                     no_match_df[no_match_df.id.isin(no_match_ids)],
-                                     predictor, score_col=score_col)
+                res_df = ev.evaluate_df(score_col=score_col)
                 res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
                 self.experiments['exp1_no_match'] = res_df
                 no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
