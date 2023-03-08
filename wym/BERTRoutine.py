@@ -31,7 +31,6 @@ from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.autonotebook import tqdm
 from Landmark_github.evaluation.Evaluate_explanation_Batch import correlation_vs_landmark, token_removal_delta_performance
-# from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df
 from .FeatureContribution import FeatureContribution
 from .FeatureExtractor import FeatureExtractor
 from .Finetune import finetune_BERT
@@ -596,7 +595,6 @@ class Routine:
 
         self.timing_models = pd.DataFrame(time_list_dict)
 
-        print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
         try:
@@ -881,12 +879,12 @@ class Routine:
                     os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_no_match_mean_delta.csv')):
                 pass
             else:
-                # TODO: edit this branch to use evaluate_df from WYM correctly
+                # TODO: edit this branch to use _evaluate_df from WYM correctly
                 from wym.run_experiments.wym_evaluation import WYMEvaluation
                 ev = WYMEvaluation(dataset_df=df, evaluate_removing_du=True, recompute_embeddings=True,
                                    variable_side='all', fixed_side='all', evaluate_positive=True)
                 # Evaluate impacts with words remotion
-                res_df = ev.evaluate_df(score_col=score_col)
+                res_df = ev._evaluate_df()
 
                 res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
                 self.experiments['exp1_match'] = res_df
@@ -899,7 +897,7 @@ class Routine:
                 match_stat.to_csv(
                     os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_match_mean_delta.csv'))
 
-                res_df = ev.evaluate_df(score_col=score_col)
+                res_df = ev._evaluate_df()
                 res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
                 self.experiments['exp1_no_match'] = res_df
                 no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
