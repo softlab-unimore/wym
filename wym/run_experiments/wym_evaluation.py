@@ -716,7 +716,7 @@ class WYMEvaluation(SoftlabEnv):
 
 
 if __name__ == "__main__":
-    utility = True
+    utility = 'all'
     wym_ev = WYMEvaluation('BeerAdvo-RateBeer', evaluate_removing_du=True, recompute_embeddings=True,
                            variable_side='all')
     results_df_du, ev_expl = wym_ev.evaluate_single_df(utility=utility, explanation='last')
@@ -729,4 +729,4 @@ if __name__ == "__main__":
 
     with open(f"./evaluation_tables/counterfactuals_{wym_ev.dataset_name}_utility_{utility}.html",
               'w') as html_file:
-        html_file.write(ev_expl.plot_counterfactuals())
+        html_file.write(ev_expl.plot_counterfactual())
