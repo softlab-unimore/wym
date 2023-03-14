@@ -882,7 +882,7 @@ class Routine:
                 # TODO: edit this branch to use _evaluate_df from WYM correctly
                 from wym.run_experiments.wym_evaluation import WYMEvaluation
                 ev = WYMEvaluation(dataset_df=df, evaluate_removing_du=True, recompute_embeddings=True,
-                                   variable_side='all', fixed_side='all', evaluate_positive=True)
+                                   variable_side='all', fixed_side='all')
                 # Evaluate impacts with words remotion
                 res_df = ev._evaluate_df()
 
