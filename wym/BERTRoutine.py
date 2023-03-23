@@ -979,12 +979,14 @@ class Routine:
         return word_relevance  # res_df_match, res_df_no_match, delta_performance, correlation_data
 
     @staticmethod
-    def plot_token_contribution(el_df, score_col='token_contribution', cut=0.1):
-        plt.rcParams.update({'font.size': 8})
+    def plot_token_contribution(el_df, score_col: str='token_contribution', cut: float=0.1, bar_fontsize: int=8,
+                                y_fontsize: int=9):
+        original_fontsize = plt.rcParams.get('font.size')
+        plt.rcParams.update({'font.size': bar_fontsize})
 
         tmp_df = el_df.copy()
         tmp_df = tmp_df.set_index(['left_word', 'right_word'])
-        tmp_df = tmp_df[tmp_df[score_col].abs() >= cut]
+        tmp_df = tmp_df[(tmp_df[score_col]).abs() >= cut]
         # colors = ['orange' ] * tmp_df.shape[0]
         colors = np.where(tmp_df[score_col] >= 0, 'green', 'red')
 
@@ -1004,10 +1006,12 @@ class Routine:
             plt.ylabel('')
 
         g.grid(axis='y', color='0.7')
-        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=9)
+        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=y_fontsize)
         yticks = g.get_yticks()
         for y0, y1 in zip(yticks[::2], yticks[1::2]):
             g.axhspan(y0, y1, color='0.7', alpha=0.1, zorder=0)
         g.set_yticks(yticks)  # force the same yticks again
         plt.tight_layout()
         plt.show()
+
+        plt.rcParams.update({'font.size': original_fontsize})
