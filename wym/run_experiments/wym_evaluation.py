@@ -572,7 +572,11 @@ class WYMEvaluation(SoftlabEnv):
             self.evaluate_single_df(df_name, utility=utility, explanation=explanation)
 
     def evaluate_single_df(self, dataset_name: str='', dataset_df: pd.DataFrame=None, 
-                           utility: Union[str, bool]='AOPC', k: int=5, explanation: str=''):
+                           utility: Union[str, bool]='AOPC', k: int=5, explanation: str='',
+                           evaluate_positive: Union[str, bool]='all'):
+
+        if evaluate_positive not in ('all', '', True, False):
+            raise ValueError(f"evaluate_positive parameter is invalid ({evaluate_positive}).")
 
         if dataset_name and dataset_df:
             raise ValueError("Specifying a dataset name is incorrect if a DataFrame is passed.")
@@ -592,9 +596,8 @@ class WYMEvaluation(SoftlabEnv):
             self.evaluate_removing_du = False
 
             self._evaluate_df(utility=utility, k=k)
-            self.calculate_save_metric(self.pos_res_df, self.model_files_path, metric_name=utility, suffix=explanation)
 
-            self._evaluate_df(utility=utility, k=k)
+            self.calculate_save_metric(self.pos_res_df, self.model_files_path, metric_name=utility, suffix=explanation)
             self.calculate_save_metric(self.neg_res_df, self.model_files_path, metric_name=utility, prefix='no_match',
                                        suffix=explanation)
         else:
@@ -615,32 +618,46 @@ class WYMEvaluation(SoftlabEnv):
 
             print('Evaluating data.')
 
-            self._evaluate_df(utility=utility, k=k)
-            self.calculate_save_metric(self.pos_res_df, self.model_files_path, metric_name=utility, suffix=explanation)
-            if self.neg_res_df is not None:
-                self.calculate_save_metric(self.neg_res_df, self.model_files_path, metric_name=utility, prefix='no_match',
+            self._evaluate_df(utility=utility, k=k, evaluate_positive=evaluate_positive)
+
+            if evaluate_positive:
+                self.calculate_save_metric(self.pos_res_df, self.model_files_path, metric_name=utility,
                                            suffix=explanation)
 
-            return self.pos_res_df, self.pos_ev, self.neg_res_df, self.neg_ev
+            if evaluate_positive == 'all' or not evaluate_positive:
+                self.calculate_save_metric(self.neg_res_df, self.model_files_path, metric_name=utility,
+                                           prefix='no_match', suffix=explanation)
 
-    def _evaluate_df(self, conf_name: str= 'bert', utility: Union[str, bool]= 'AOPC', k: int=5):
+            if evaluate_positive == 'all':
+                return self.pos_res_df, self.pos_ev, self.neg_res_df, self.neg_ev
+
+            elif evaluate_positive:
+                return self.pos_res_df, self.pos_ev
+
+            else:
+                return self.neg_res_df, self.neg_ev
+
+    def _evaluate_df(self, conf_name: str= 'bert', utility: Union[str, bool]= 'AOPC', k: int=5,
+                     evaluate_positive: Union[str, bool]='all'):
 
         ## ids = list(self.dataset.id.unique())
         print(f'Testing unit removal with -- {self.score_col}')
 
-        print("Evaluating positive examples.")
+        if evaluate_positive:
 
-        self.pos_res_df = self.pos_ev.evaluate_impacts(utility=utility, k=k)
-        self.pos_res_df['conf'] = conf_name
+            print("Evaluating positive examples.")
 
-        if utility == 'AOPC':  # applicable only on positive examples, don't evaluate negatives
-            print("AOPC utility is applicable only on positive examples.")
-            return self.pos_res_df, None
+            self.pos_res_df = self.pos_ev.evaluate_impacts(utility=utility, k=k)
+            self.pos_res_df['conf'] = conf_name
 
-        print("Evaluating negative examples.")
+            if utility == 'AOPC':  # applicable only on positive examples, don't evaluate negatives
+                print("AOPC utility is applicable only on positive examples.")
 
-        self.neg_res_df = self.neg_ev.evaluate_impacts(utility=utility, k=k)
-        self.neg_res_df['conf'] = conf_name
+        if not evaluate_positive or evaluate_positive == 'all':
+            print("Evaluating negative examples.")
+
+            self.neg_res_df = self.neg_ev.evaluate_impacts(utility=utility, k=k)
+            self.neg_res_df['conf'] = conf_name
 
         return self.pos_res_df, self.neg_res_df
 
@@ -655,6 +672,9 @@ class WYMEvaluation(SoftlabEnv):
         self.no_match_ids = neg_exp.id.unique()
         self.match_df = self.dataset[self.dataset.id.isin(self.match_ids)]
         self.no_match_df = self.dataset[self.dataset.id.isin(self.no_match_ids)]
+
+        self.pos_impacts_df = pos_exp
+        self.neg_impacts_df = neg_exp
 
         self.pos_ev.update_settings(impacts_df=self.match_df)
         self.neg_ev.update_settings(impacts_df=self.no_match_df)
@@ -724,24 +744,91 @@ class WYMEvaluation(SoftlabEnv):
 
 
 if __name__ == "__main__":
-    utility = True
+    utility = 'degradation'
     variable_side='all'
     fixed_side='all'
     explanation = 'LIME'
+    dataset_name = 'iTunes-Amazon'
     evaluate_removing_du = True
-    wym_ev = WYMEvaluation('BeerAdvo-RateBeer', evaluate_removing_du=evaluate_removing_du, recompute_embeddings=True,
+    wym_ev = WYMEvaluation(dataset_name, evaluate_removing_du=evaluate_removing_du, recompute_embeddings=True,
                            variable_side=variable_side, fixed_side=fixed_side)
-
     pos_results_df, pos_ev_expl, neg_results_df, neg_ev_expl = wym_ev.evaluate_single_df(utility=utility,
-                                                                                         explanation='last')
+                                                                                     explanation='last')
 
-    # wym_ev = WYMEvaluation('BeerAdvo-RateBeer', evaluate_removing_du=True, recompute_embeddings=True,
+    # wym_ev = WYMEvaluation('BeerAdvo-RateBeer', evaluate_removing_du=False, recompute_embeddings=True,
     #                        variable_side='all')
     # pos_results_df, pos_ev_expl, neg_results_df, neg_ev_expl = wym_ev.evaluate_single_df(utility=utility,
     #                                                                                      explanation=explanation)
     print(pos_results_df)
 
     pos_ev_expl.generate_counterfactual_examples()
+
+    def generate_negative_dataset_ad_hoc():
+        dataset_with_pred = neg_ev_expl.dataset.copy()
+        preds_per_id = pd.DataFrame(columns=['id', 'start_pred'])
+
+        for index, id_ in enumerate(dataset_with_pred.id.unique()):
+            preds_per_id = pd.concat(
+                [preds_per_id, pd.DataFrame({'id': id_, 'start_pred': neg_ev_expl.start_pred[index]}, index=[0])],
+                ignore_index=True)
+
+        dataset_with_pred = dataset_with_pred.merge(preds_per_id, on='id')
+        dataset_with_pred = dataset_with_pred.sort_values('start_pred', ascending=False)
+
+        low_pred_df = dataset_with_pred[dataset_with_pred['start_pred'] < 0.1]
+        low_pred_df = low_pred_df.drop(columns=['start_pred']).sort_index()
+        low_pred_impacts_df = neg_ev_expl.impacts_df[neg_ev_expl.impacts_df.id.isin(low_pred_df.id)]
+
+        # in una versione tolgo nome, in una nome album
+        # versione 1
+
+        def delete_artist_name(row_):
+            if row_['left_attribute'] == 'Artist_Name':
+                row_['left_word'] = ''
+
+            return row_
+
+        def generate_description_from_side_attributes(df_row, side='left'):
+            if side not in ('left', 'right'):
+                raise ValueError("Wrong side value")
+
+            return ' '.join(
+                [str(df_row[key]) for key in df_row.keys() if
+                 key.startswith(f'{side}_') and
+                 df_row[key] is not np.nan and
+                 key not in (f'{side}_id', f'{side}_description')])
+
+        def split_left_and_right_word_prefixes(group_df):
+            encoded_left_desc = group_df[group_df['column'].str.startswith('left_')]['word_prefix'].to_list()
+            encoded_right_desc = group_df[group_df['column'].str.startswith('right_')]['word_prefix'].to_list()
+            return pd.Series([[encoded_left_desc, encoded_right_desc]], index=['encoded_descs'])
+
+        low_pred_df_no_name = low_pred_df.copy()
+        low_pred_df_no_name['left_Song_Name'] = [''] * low_pred_df_no_name.shape[0]
+
+        low_pred_impacts_df_no_name = low_pred_impacts_df.apply(delete_artist_name, axis=1)
+
+        neg_ev_expl.update_settings(dataset=low_pred_df_no_name, impacts_df=low_pred_impacts_df_no_name)
+        neg_ev_expl.evaluate_impacts()
+
+        tmp = neg_ev_expl.res_df.merge(neg_ev_expl.dataset, on='id')
+        tmp = tmp.loc[tmp.groupby(['id'])['num_tokens'].idxmax()]
+
+        cpd = tmp.copy()
+        cpd['left_Song_Name'] = tmp['right_Song_Name']
+
+        cpd['left_description'] = cpd.apply(generate_description_from_side_attributes, axis=1)
+        cpd['right_description'] = cpd.apply(generate_description_from_side_attributes, side='right', axis=1)
+        encoded_descriptions = neg_ev_expl.variable_mapper.encode_elements(cpd).groupby('id').apply(
+            split_left_and_right_word_prefixes)
+
+        cpd = cpd.merge(encoded_descriptions, on='id').sort_values('new_pred', ascending=False)
+
+        return cpd
+
+    cpd = generate_negative_dataset_ad_hoc()
+    neg_ev_expl.counterfactuals_plotting_data = cpd[0:10]
+    neg_ev_expl.plot_counterfactual()
 
     if not os.path.exists('./evaluation_tables'):
         os.makedirs("./evaluation_tables")
