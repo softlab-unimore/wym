@@ -1,18 +1,14 @@
-import os
-import sys
+from typing import Union
+import pandas as pd
 
-prefix = ''
-if '/home/' in os.path.expanduser('~'):  # UNI env
-    prefix = '/home/baraldian'
-softlab_path = os.path.join(prefix + '/content/drive/Shareddrives/SoftLab/')
-project_path = os.path.join(softlab_path, 'Projects', 'WYM')
-sys.path.append(os.path.join(project_path, 'notebooks'))
-
-from wym.notebook_import_utility_env import *
+from wym.import_utility import *
+from wym.import_utility import prefix
 from warnings import simplefilter
-
 from tqdm.autonotebook import tqdm
-from Landmark_github.evaluation.Evaluate_explanation_Batch import *
+# from Landmark_github.evaluation.Evaluate_explanation_Batch import *
+from Landmark_github.evaluation.Evaluate_explanation_Batch import EvaluateExplanation, partial
+from wym.BERTRoutine import Routine
+from Landmark_github.landmark.landmark import Landmark, Mapper
 
 
 class SoftlabEnv:
@@ -50,94 +46,13 @@ class SoftlabEnv:
         simplefilter(action='ignore')
         pd.options.display.float_format = '{:.4f}'.format
         self.excluded_cols = ['id', 'left_id', 'right_id']  # ['']
-        if '/home/' in os.path.expanduser('~'):  # UNI env
-            prefix = os.path.expanduser('~')
-        else:
-            prefix = '.'
-            # install here for colab env
+
         self.softlab_path = os.path.join(prefix + '/content/drive/Shareddrives/SoftLab/')
-        self.dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching')
         self.project_path = os.path.join(self.softlab_path, 'Projects', 'WYM')
         self.base_files_path = os.path.join(self.project_path, 'dataset_files')
 
-    @staticmethod
-    def explanation_from_decision_unit_to_token(em_df, word_relevance, impact_col: str='token_contribution'):
-        if impact_col not in word_relevance.columns:
-            raise ValueError(f"Missing column {impact_col} in dataframe.")
-
-        wr = append_prefix(em_df, word_relevance, decision_unit_view=True)
-
-        df_list = list()
-        wr[impact_col] = np.where((wr['left_word'] != '[UNP]') & (wr['right_word'] != '[UNP]'),
-                                            wr[impact_col] / 2, wr[impact_col])
-        for side in ['left', 'right']:
-            side_columns = wr.columns[wr.columns.str.startswith(side)].to_list()
-            token_impact = wr.loc[:, ['id', 'label', impact_col] + side_columns]
-            token_impact.columns = token_impact.columns.str.replace(side + '_', '')
-            token_impact = token_impact[token_impact['word'] != '[UNP]']
-            token_impact['attribute'] = side + '_' + token_impact['attribute']
-
-            df_list.append(token_impact)
-        wr_flat = pd.concat(df_list, 0).reset_index(drop=True)
-        wr_flat = wr_flat.rename(columns={'word_prefixes': 'word_prefix', impact_col: 'impact'})
-        assert 'word_prefix' in wr_flat.columns
-        return wr_flat
-
-    @staticmethod
-    def evaluate_df(word_relevance, df_to_process, predictor, exclude_attrs=('id', 'left_id', 'right_id', 'label'),
-                    score_col='pred', conf_name='bert', utility='AOPC', k=5, decision_unit_view=True,
-                    remove_decision_unit_only=False):
-        ids = list(df_to_process.id.unique())
-        print(f'Testing unit removal with -- {score_col}')
-        assert df_to_process.shape[
-                   0] > 0, f'DataFrame to evaluate must have some elements. Passed df has shape {df_to_process.shape[0]}'
-        evaluation_df = df_to_process.copy().replace(pd.NA, '')
-        word_relevance_prefix = append_prefix(evaluation_df, word_relevance, decision_unit_view=decision_unit_view,
-                                              exclude_attrs=exclude_attrs)
-        if score_col == 'pred':
-            word_relevance_prefix['impact'] = word_relevance_prefix[score_col] - 0.5
-        else:
-            word_relevance_prefix['impact'] = word_relevance_prefix[score_col]
-        word_relevance_prefix['conf'] = conf_name
-
-        res_list = []
-        # for side in ['left', 'right']:
-        # evaluation_df['pred'] = predictor(evaluation_df)
-        side_word_relevance_prefix = word_relevance_prefix.copy()
-        # side_word_relevance_prefix['word_prefix'] = side_word_relevance_prefix[side + '_word_prefixes']
-        # side_word_relevance_prefix = side_word_relevance_prefix.query(f'{side}_word != "[UNP]"')
-        word_relevance_prefix.copy()
-        ev = EvaluateExplanation(side_word_relevance_prefix, evaluation_df, predict_method=predictor,
-                                 exclude_attrs=exclude_attrs, percentage=.25, num_rounds=3,
-                                 evaluate_removing_du=decision_unit_view,
-                                 recompute_embeddings=remove_decision_unit_only)
-
-        # fixed_side = 'right' if side == 'left' else 'left'
-        impacts_all = side_word_relevance_prefix
-        impact_df = impacts_all[impacts_all.id.isin(ids)]
-        start_el = df_to_process[df_to_process.id.isin(ids)]
-
-        variable_side = fixed_side = 'all'
-        res = ev.evaluate_impacts(start_el, impact_df, variable_side=variable_side, fixed_side=fixed_side,
-                                  add_before_perturbation=None,
-                                  add_after_perturbation=None, utility=utility, k=k)
-        res_df = pd.DataFrame(res)
-        res_df['conf'] = conf_name # todo check if conf name is already present and remove
-        res_df['error'] = res_df.expected_delta - res_df.detected_delta
-
-        return res_df, ev
-
-    @staticmethod
-    def get_match_no_match_df(df, pred, delta=0.1, pred_threshold=0.01):
-        # match_df = df[pred > .5 + delta]
-        match_df = df[df.label > .5]
-        sample_len = min(100, match_df.shape[0])
-        match_ids = match_df.id.sample(sample_len, random_state=0).values
-        # no_match_df = df[(df['label'] < 0.5) & (pred >= pred_threshold)]
-        no_match_df = df[df['label'] < 0.5]
-        sample_len = min(100, no_match_df.shape[0])
-        no_match_ids = no_match_df.id.sample(sample_len, random_state=0).values
-        return match_df, match_ids, no_match_df, no_match_ids
+        self.pos_res_df = None
+        self.neg_res_df = None
 
     def calculate_save_metric(self, comb_df, model_files_path, metric_name, prefix='', suffix='', load=False):
         prefix = prefix + '_' if prefix != '' else ''
@@ -145,8 +60,9 @@ class SoftlabEnv:
 
         try:
             os.makedirs(os.path.join(model_files_path, 'results'))
-        except Exception as e:
-            print(e)
+        except FileExistsError:
+            pass
+
         tmp_path = os.path.join(model_files_path, 'results', f'{prefix}{metric_name}_perturbations{suffix}.csv')
         if load:
             comb_df = pd.read_csv(tmp_path)
@@ -160,15 +76,20 @@ class SoftlabEnv:
             grouped = res_df.groupby(['id', 'comb']).agg(
                 {'detected_delta': [('sum', lambda x: x.sum()), 'size']}).droplevel(0, 1)
 
-            AOPC = (grouped['sum'] / grouped['size']).groupby('comb').mean()
+            aopc = (grouped['sum'] / grouped['size']).groupby('comb').mean()
 
             res_df.to_csv(tmp_path, index=False)
             tmp_path = os.path.join(model_files_path, 'results', f'{prefix}{metric_name}_score{suffix}.csv')
-            AOPC.to_csv(tmp_path)
-            print(AOPC)
+            aopc.to_csv(tmp_path)
+            print(aopc)
+
         elif metric_name == 'sufficiency':
             res_df = comb_df
-            self.res_df = res_df
+            if not prefix:
+                self.pos_res_df = res_df
+            else:
+                self.neg_res_df = res_df
+
             res_df['comb'] = np.where(res_df['comb_name'].str.startswith('top'), 'top', 'random')
             res_df['same_class'] = (res_df['start_pred'] > 0.5) == (res_df['new_pred'] > .5)
             sufficiency = res_df.groupby(['id', 'comb']).agg(
@@ -179,127 +100,594 @@ class SoftlabEnv:
             print(sufficiency)
 
 
-class WYMevaluation(SoftlabEnv):
-    def __init__(self, additive_only=False):
+class WYMEvaluation(SoftlabEnv):
+    def __init__(self, dataset_name: str = '', dataset_df: pd.DataFrame = None, model_name: str = 'BERT',
+                 reset_files: bool = False, reset_networks: bool = False, we_finetuned: bool = True,
+                 sentence_embedding: bool = False, batch_size: int = 256, delta: float = 0.1, additive_only: bool = False,
+                 evaluate_removing_du: bool = True, recompute_embeddings: bool = True, variable_side: str = 'all',
+                 fixed_side: str = 'all', score_col: str = 'token_contribution',
+                 exclude_attrs: object = ('id', 'left_id', 'right_id', 'label'), add_before_perturbation: object = None,
+                 add_after_perturbation: object = None, percentage: float = 0.25, num_rounds: int = 3):
+
+        """
+        Class to evaluate an Entity Matching dataset using WYM.
+
+
+        :param dataset_name: string containing the name of the dataset which will load one of the available default
+        datasets. Must be empty if dataset_df is passed.
+        :param dataset_df: a pandas.DataFrame object containing the dataset to evaluate.
+        :param model_name: the name of the underlying Deep Learning model to use for the creation of word embeddings.
+        :param reset_files: specific BERTRoutine class parameter, resets the word embeddings files and recomputes
+        them from scratch.
+        :param reset_networks: specific BERTRoutine class parameter, resets the network cache and recomputes it.
+        :param we_finetuned: specific BERTRoutine class parameter, allows usage of fine-tuned embeddings.
+        :param sentence_embedding: specific BERTRoutine class parameter, uses sentence embeddings instead of
+        word embeddings.
+        :param batch_size: specific BERTRoutine class parameter, specifies the batch size for the generation of
+        word embeddings.
+        :param delta: value to use during the evaluation to decide when a new evaluation can be considered correct.
+        The value is added to the default of 0.5.
+        :param additive_only: specific BERTRoutine class parameter, specifies the model behavior for the computation
+        of features.
+        :param evaluate_removing_du: evaluates the dataset using Decision Units or single tokens.
+        :param recompute_embeddings: specifies if the word embeddings must be recomputed after the perturbations or not.
+        :param variable_side: the side of the Entity Matching dataset that can be perturbed.
+        :param fixed_side: the side of the Entity Matching dataset that remains untouched.
+        :param score_col: column name used to compute the score of the match during the evaluation.
+        :param exclude_attrs: attributes to exclude from the evaluation, for example the "id" column.
+        :param add_before_perturbation: TO_COMPLETE
+        :param add_after_perturbation: TO_COMPLETE
+        :param percentage: specific EvaluateExplanation class parameter, TO_COMPLETE
+        :param num_rounds: specific EvaluateExplanation class parameter, TO_COMPLETE
+        """
+        if not dataset_name and not dataset_df:
+            raise ValueError("Dataset name cannot be empty if the dataset DataFrame is None.")
+
+        if dataset_name and dataset_df:
+            raise ValueError("Specifying a dataset name is incorrect if a DataFrame is passed.")
+
+        if not recompute_embeddings and not evaluate_removing_du:
+            ValueError("It is not possible to evaluate on single tokens without recomputing embeddings.")
+
+        if evaluate_removing_du and variable_side != 'all':
+            ValueError("Invalid settings: required evaluation with Decision Units but the variable side is not 'all'.")
+
         super().__init__()
+        # definition of WYM parameters
         self.project_path = os.path.join(self.softlab_path, 'Projects', 'WYM')
-        self.additive_only = additive_only
-        sys.path.append(os.path.join(self.softlab_path, 'Projects/external_github/ditto'))
-        sys.path.append(os.path.join(self.softlab_path, 'Projects/external_github'))
-        sys.path.append(os.path.join(self.project_path, 'common_functions'))
-        sys.path.append(os.path.join(self.project_path, 'src'))
-        sys.path.append(os.path.join(self.project_path, 'src', 'wym'))
+        self.evaluate_removing_du = evaluate_removing_du
+        self.recompute_embeddings = recompute_embeddings
+        self.dataset_name = dataset_name
+        self.delta = delta
 
-        # from wrapper.DITTOWrapper import DITTOWrapper
-        # from landmark import Landmark
+        # definition of evaluation parameters for the explanation
+        self.fixed_accepted_sides = frozenset(['left', 'right', 'all', ''])
+        self.variable_accepted_sides = frozenset(['left', 'right', 'all'])
 
-    def evaluate_all_df(self, utility='AOPC', explanation='', **kwargs):
+        if variable_side == 'all' and fixed_side == 'all':
+            fixed_side = str()
+
+        if not variable_side and not fixed_side:
+            raise ValueError("Invalid settings: variable side and fixed side cannot be both empty.")
+
+        if variable_side not in self.variable_accepted_sides:
+            raise ValueError("Invalid settings: variable side is not 'left', 'right' or 'all'.")
+
+        if fixed_side not in self.fixed_accepted_sides:
+            raise ValueError("Invalid settings: fixed side is not 'left', 'right', 'all' or empty.")
+
+        if variable_side in ('left', 'right') and fixed_side == 'all':
+            raise ValueError(f"Invalid settings: variable side is {variable_side} but fixed side is {fixed_side}.")
+
+        if fixed_side in ('left', 'right') and variable_side == 'all':
+            raise ValueError(f"Invalid settings: fixed side is {fixed_side} but variable side is {variable_side}.")
+
+        if variable_side == fixed_side:
+            raise ValueError(f"Invalid settings: variable and fixed sides are the same "
+                             f"({variable_side}, {fixed_side}).")
+
+        self.variable_side = variable_side
+        self.fixed_side = fixed_side
+        self.exclude_attrs = exclude_attrs
+        self.score_col = score_col
+
+        current_path_env = set(sys.path)  # speed up search for duplicates with set
+
+        self.paths = {
+            'ditto': os.path.join(self.softlab_path, 'Projects/external_github/ditto'),
+            'external_github': os.path.join(self.softlab_path, 'Projects/external_github'),
+            'common_functions': os.path.join(self.project_path, 'common_functions'),
+            'wym_src': os.path.join(self.project_path, 'src'),
+            'wym': os.path.join(self.project_path, 'src', 'wym')
+        }
+
+        for path_ in self.paths.values():
+            if path_ not in current_path_env:
+                sys.path.append(path_)
+
+        if not dataset_df:
+            # definition of environment paths
+            self.dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching', dataset_name)
+
+            # definition of BERT Routine parameters
+            self.reset_files = reset_files
+            self.reset_networks = reset_networks
+            self.we_finetuned = we_finetuned
+            self.sentence_embedding = sentence_embedding
+            self.batch_size = batch_size
+            self.additive_only = additive_only
+            self.bert_params = {'reset_files', 'reset_networks', 'we_finetuned', 'sentence_embeddings', 'batch_size',
+                                'additive_only'}
+
+            # definition of path for the dataset
+            self.model_name = model_name
+            self.model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, self.model_name)
+
+            # definition of BERT Routine, Predictor, dataset and impacts_df
+            if we_finetuned:
+                self.we_finetuned_path = os.path.join(self.project_path, 'dataset_files', self.dataset_name,
+                                                      self.model_name, 'sBERT')
+            else:
+                self.we_finetuned_path = str()
+
+            self.routine, self.predictor = self.init_routine()
+
+            _, _, self.word_relevance_df = self.routine.get_calculated_data('test')
+            # remove NaN from original dataset
+            self.dataset = self.routine.test_merged.copy().replace(pd.NA, '')
+
+        else:
+            # TODO: to complete, understand what to do with BERT to prepare the model for this dataframe
+            self.dataset = dataset_df.replace(pd.NA, '')
+
+        if self.dataset.shape[0] <= 0:
+            raise ValueError(f'Dataset to evaluate must have some elements; the dataset has shape '
+                             f'{self.dataset.shape[0]}.')
+
+        self.match_df, self.match_ids, self.no_match_df, self.no_match_ids = self.get_match_no_match_df(
+            delta=self.delta)
+
+        self.pos_impacts_df = self.word_relevance_df[self.word_relevance_df.id.isin(self.match_ids)]
+        self.neg_impacts_df = self.word_relevance_df[self.word_relevance_df.id.isin(self.no_match_ids)]
+
+        if self.score_col not in self.pos_impacts_df.columns or self.score_col not in self.neg_impacts_df.columns:
+            raise ValueError(f"Missing column {self.score_col} in dataframe.")
+
+        self.append_prefix()
+
+        # EvaluateExplanation(em_df, word_relevance_prefix)
+        self.pos_ev = EvaluateExplanation(self.match_df, self.pos_impacts_df, predict_method=self.predictor,
+                                          exclude_attrs=exclude_attrs, percentage=percentage,
+                                          num_rounds=num_rounds, add_before_perturbation=add_before_perturbation,
+                                          add_after_perturbation=add_after_perturbation,
+                                          evaluate_removing_du=self.evaluate_removing_du,
+                                          recompute_embeddings=self.recompute_embeddings,
+                                          variable_side=self.variable_side, fixed_side=self.fixed_side)
+
+        self.neg_ev = EvaluateExplanation(self.no_match_df, self.neg_impacts_df, predict_method=self.predictor,
+                                          exclude_attrs=exclude_attrs, percentage=percentage,
+                                          num_rounds=num_rounds, add_before_perturbation=add_before_perturbation,
+                                          add_after_perturbation=add_after_perturbation,
+                                          evaluate_removing_du=self.evaluate_removing_du,
+                                          recompute_embeddings=self.recompute_embeddings,
+                                          variable_side=self.variable_side, fixed_side=self.fixed_side)
+
+        # attributes defined at runtime during the evaluation of impacts_df
+        self.prefix_wr = None
+
+    def update_settings(self, **kwargs):
+        updated_dataset = False
+        updated_model = False
+        updated_evaluate_removing_du = False
+
+        dataset_name = kwargs['dataset_name'] if 'dataset_name' in kwargs else str()
+        dataset_df = kwargs['dataset_df'] if 'dataset_df' in kwargs else None
+
+        if dataset_name and dataset_df:
+            raise ValueError("Specifying a dataset name is incorrect if a DataFrame is passed.")
+
+        if (dataset_name and self.dataset_name != dataset_name) or \
+                (dataset_df is not None and
+                 (not self.dataset.equals(dataset_df) or self.dataset.shape != dataset_df.shape)):
+            updated_dataset = True
+
+            if dataset_df is not None:
+                self.dataset_name = str()
+
+            if dataset_name:
+                self.dataset_name = dataset_name
+
+        model_name = kwargs['model_name'] if 'model_name' in kwargs else str()
+
+        if model_name and self.model_name != model_name:
+            updated_model = True
+            self.model_name = model_name
+
+        for bert_param in self.bert_params:
+            if bert_param in kwargs:
+                eval(f"self.{bert_param} = kwargs['{bert_param}']")
+
+        if 'delta' in kwargs:
+            self.delta = kwargs['delta']
+
+        if 'exclude_attrs' in kwargs:
+            self.exclude_attrs = kwargs['exclude_attrs']
+
+        if 'score_col' in kwargs:
+            self.score_col = kwargs['score_col']
+
+        evaluate_removing_du = kwargs['evaluate_removing_du'] \
+            if 'evaluate_removing_du' in kwargs else self.evaluate_removing_du
+        recompute_embeddings = kwargs['recompute_embeddings'] \
+            if 'recompute_embeddings' in kwargs else self.recompute_embeddings
+
+        if not recompute_embeddings and not evaluate_removing_du:
+            ValueError("Invalid settings: it is not possible to evaluate on single tokens without "
+                       "recomputing embeddings.")
+        else:
+            if self.evaluate_removing_du != evaluate_removing_du:
+                updated_evaluate_removing_du = True
+                self.evaluate_removing_du = evaluate_removing_du
+
+                if 'word_prefix' in self.pos_impacts_df:
+                    self.pos_impacts_df = self.word_relevance_df[self.word_relevance_df.id.isin(self.match_ids)]
+
+                if 'word_prefix' in self.neg_impacts_df:
+                    self.neg_impacts_df = self.word_relevance_df[self.word_relevance_df.id.isin(self.no_match_ids)]
+
+                if not (updated_dataset or updated_model):
+                    self.append_prefix()
+
+            self.recompute_embeddings = recompute_embeddings
+
+        variable_side = kwargs['variable_side'] if 'variable_side' in kwargs else str()
+        fixed_side = kwargs['fixed_side'] if 'fixed_side' in kwargs else str()
+
+        if variable_side == 'all' and fixed_side == 'all':
+            fixed_side = str()
+
+        if variable_side or fixed_side:
+            if not variable_side and fixed_side:
+                raise ValueError(f"Invalid settings: variable side is empty but fixed side is {fixed_side}.")
+
+            if variable_side:
+                if variable_side not in self.variable_accepted_sides:
+                    raise ValueError("Invalid settings: variable side is not left, right or all.")
+
+                if (variable_side in ('left', 'right') and fixed_side == 'all') or \
+                    (variable_side in ('left', 'right') and not fixed_side):
+                    raise ValueError(
+                        f"Invalid settings: variable side is {variable_side} but fixed side is empty.")
+
+            if fixed_side:
+                if fixed_side not in self.fixed_accepted_sides:
+                    raise ValueError("Invalid settings: fixed side is not left, right, all or empty.")
+
+                if (fixed_side in ('left', 'right') and variable_side == 'all') or \
+                    (fixed_side in ('left', 'right') and not variable_side):
+                    raise ValueError(
+                        f"Invalid settings: fixed side is {fixed_side} but variable side is empty.")
+
+            if variable_side == 'all' and fixed_side:
+                print(f"Warning, invalid settings: variable side is {variable_side} and fixed side is not empty. "
+                      f"Ignoring fixed side value.")
+                fixed_side = str()
+
+            if variable_side == fixed_side:
+                raise ValueError(f"Invalid settings: variable and fixed sides are the same "
+                                 f"({variable_side}, {fixed_side}).")
+
+            if variable_side:
+                self.variable_side = variable_side
+                self.fixed_side = fixed_side
+
+                kwargs['variable_side'] = variable_side
+                kwargs['fixed_side'] = fixed_side
+
+        if evaluate_removing_du and variable_side != 'all':
+            ValueError("Invalid settings: required evaluation with Decision Units but the variable side is not 'all'.")
+
+        if updated_evaluate_removing_du:
+            kwargs['impacts_df'] = self.pos_impacts_df
+
+        self.pos_ev.update_settings(**kwargs)
+
+        if updated_evaluate_removing_du:
+            kwargs['impacts_df'] = self.neg_impacts_df
+
+        self.neg_ev.update_settings(**kwargs)
+
+        if (updated_dataset or updated_model) and dataset_df is None:
+            self.model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, self.model_name)
+
+            _, _, self.word_relevance_df = self.routine.get_calculated_data('test')
+            # remove NaN from original dataset
+            self.dataset = self.routine.valid_merged.copy().replace(pd.NA, '')
+
+        elif dataset_df is not None:
+            # TODO: to complete, understand what to do with BERT to prepare the model for this dataframe
+            self.dataset = dataset_df.replace(pd.NA, '')
+
+        if updated_dataset:
+            if self.dataset.shape[0] <= 0:
+                raise ValueError(f'Dataset to evaluate must have some elements; the dataset has shape '
+                                 f'{self.dataset.shape[0]}.')
+
+            self.init_routine()
+            self.get_match_no_match_df(delta=self.delta)
+
+            self.pos_impacts_df = self.word_relevance_df[self.word_relevance_df.id.isin(self.match_ids)]
+
+            self.neg_impacts_df = self.word_relevance_df[self.word_relevance_df.id.isin(self.no_match_ids)]
+
+            if self.score_col not in self.pos_impacts_df.columns or self.score_col not in self.neg_impacts_df.columns:
+                raise ValueError(f"Missing column {self.score_col} in dataframe.")
+
+            self.append_prefix()
+
+            percentage = kwargs['percentage'] if 'percentage' in kwargs else 0.25
+            num_rounds = kwargs['num_rounds'] if 'num_rounds' in kwargs else 3
+            add_before_perturbation = kwargs['add_before_perturbation'] if 'add_before_perturbation' in kwargs else None
+            add_after_perturbation = kwargs['add_after_perturbation'] if 'add_after_perturbation' in kwargs else None
+
+            self.pos_ev = EvaluateExplanation(self.match_df, self.pos_impacts_df, predict_method=self.predictor,
+                                          exclude_attrs=self.exclude_attrs, percentage=percentage,
+                                          num_rounds=num_rounds, add_before_perturbation=add_before_perturbation,
+                                          add_after_perturbation=add_after_perturbation,
+                                          evaluate_removing_du=self.evaluate_removing_du,
+                                          recompute_embeddings=self.recompute_embeddings,
+                                          variable_side=self.variable_side, fixed_side=self.fixed_side)
+
+            self.neg_ev = EvaluateExplanation(self.no_match_df, self.neg_impacts_df, predict_method=self.predictor,
+                                              exclude_attrs=self.exclude_attrs, percentage=percentage,
+                                              num_rounds=num_rounds, add_before_perturbation=add_before_perturbation,
+                                              add_after_perturbation=add_after_perturbation,
+                                              evaluate_removing_du=self.evaluate_removing_du,
+                                              recompute_embeddings=self.recompute_embeddings,
+                                              variable_side=self.variable_side, fixed_side=self.fixed_side)
+            self.prefix_wr = None
+
+    @staticmethod
+    def get_prefix(em_df, word_relevance_df, side: str):
+        assert side in ['left', 'right']
+        word_relevance_el = word_relevance_df.copy().reset_index(drop=True)
+        mapper = Mapper([x for x in em_df.columns if x.startswith(side + '_') and x != side + '_id'], r' ')
+        available_prefixes = mapper.encode_attr(em_df).split()
+        assigned_pref = list()
+        word_prefixes = list()
+        attr_to_code = {v: k for k, v in mapper.attr_map.items()}
+        for i in range(word_relevance_el.shape[0]):
+            word = str(word_relevance_el.loc[i, side + '_word'])
+            if word == '[UNP]':
+                word_prefixes.append('[UNP]')
+            else:
+                col = word_relevance_el.loc[i, side + '_attribute']
+                col_code = attr_to_code[side + '_' + col]
+                turn_prefixes = [x for x in available_prefixes if x[0] == col_code]
+                idx = 0
+                while idx < len(turn_prefixes) and word != turn_prefixes[idx][4:]:
+                    idx += 1
+                if idx < len(turn_prefixes):
+                    tmp = turn_prefixes[idx]
+                    del turn_prefixes[idx]
+                    word_prefixes.append(tmp)
+                    assigned_pref.append(tmp)
+                else:
+                    idx = 0
+                    while idx < len(assigned_pref) and word != assigned_pref[idx][4:]:
+                        idx += 1
+                    if idx < len(assigned_pref):
+                        word_prefixes.append(assigned_pref[idx])
+                    else:
+                        assert False, word
+
+        return word_prefixes
+
+    def append_prefix(self) -> pd.DataFrame:
+
+        for impacts_df in (self.pos_impacts_df, self.neg_impacts_df):
+            ids = impacts_df['id'].unique()
+            res = list()
+            compute_word_prefix_only = False
+
+            if 'left_word_prefixes' in impacts_df.columns and 'right_word_prefixes' in impacts_df.columns:
+                compute_word_prefix_only = True
+
+            if not compute_word_prefix_only:
+                for id_ in ids:
+                    el = self.dataset[self.dataset.id == id_]
+                    word_relevance_el = impacts_df[impacts_df.id == id_]
+
+                    word_relevance_el['left_word_prefixes'] = self.get_prefix(el, word_relevance_el, 'left')
+                    word_relevance_el['right_word_prefixes'] = self.get_prefix(el, word_relevance_el, 'right')
+
+                    res.append(word_relevance_el.copy())
+
+                res_df_ = pd.concat(res)
+
+                if self.variable_side == 'all':
+                    mapper = Mapper(self.dataset.loc[:, np.setdiff1d(self.dataset.columns, self.exclude_attrs)])
+                    assert len(mapper.attr_map.keys()) % 2 == 0, 'The attributes must be the same for the two sources.'
+                    shift = int(len(mapper.attr_map.keys()) / 2)
+                    res_df_['right_word_prefixes'] = res_df_['right_word_prefixes'].apply(
+                        lambda x: chr(ord(x[0]) + shift) + x[1:] if x != '[UNP]' else x)
+            else: # the DataFrame doesn't need modifications, just compute the word_prefix column
+                res_df_ = impacts_df
+
+            if not self.evaluate_removing_du:
+                df_list = list()
+
+                score_col = 'impact' if compute_word_prefix_only else self.score_col
+
+                res_df_[score_col] = np.where((res_df_['left_word'] != '[UNP]') & (res_df_['right_word'] != '[UNP]'),
+                                                   res_df_[score_col] / 2, res_df_[score_col])
+
+                for side in ['left', 'right']:
+                    side_columns = res_df_.columns[res_df_.columns.str.startswith(side)].to_list()
+                    token_impact = res_df_.loc[:, ['id', 'label', score_col] + side_columns]
+                    token_impact.columns = token_impact.columns.str.replace(side + '_', '')
+                    token_impact = token_impact[token_impact['word'] != '[UNP]']
+                    token_impact['attribute'] = side + '_' + token_impact['attribute']
+
+                    df_list.append(token_impact)
+
+                res_df_ = pd.concat(df_list, 0).reset_index(drop=True)
+                res_df_ = res_df_.rename(columns={'word_prefixes': 'word_prefix'})
+
+            if not compute_word_prefix_only:
+                res_df_ = res_df_.rename(columns={self.score_col: 'impact'})
+
+            if self.score_col == 'pred':
+                res_df_['impact'] -= 0.5
+
+            if impacts_df.equals(self.pos_impacts_df):
+                self.pos_impacts_df = res_df_
+
+            else:
+                self.neg_impacts_df = res_df_
+
+        return res_df_
+
+    def get_match_no_match_df(self, delta=0.0):
+        # match_df = df[pred > .5 + delta]
+        match_df = self.dataset[self.dataset.label > .5 + delta]
+        sample_len = min(100, match_df.shape[0])
+        match_ids = match_df.id.sample(sample_len, random_state=0).values
+        # no_match_df = df[(df['label'] < 0.5) & (pred >= pred_threshold)]
+        no_match_df = self.dataset[self.dataset['label'] < 0.5]
+        sample_len = min(100, no_match_df.shape[0])
+        no_match_ids = no_match_df.id.sample(sample_len, random_state=0).values
+
+        self.match_df = match_df
+        self.match_ids = match_ids
+        self.no_match_df = no_match_df
+        self.no_match_ids = no_match_ids
+
+        return match_df, match_ids, no_match_df, no_match_ids
+
+    def evaluate_all_df(self, utility: Union[str, bool]='AOPC', explanation: str=''):
         for df_name in tqdm(list(self.sorted_dataset_names)):
             gc.collect()
             torch.cuda.empty_cache()
-            self.evaluate_single_df(df_name, utility=utility, explanation=explanation, **kwargs)
+            self.evaluate_single_df(df_name, utility=utility, explanation=explanation)
 
-    def evaluate_single_df(self, dataset_name="Amazon-Google", reset_files=False,
-                           reset_networks=False,  # @param {type:"boolean"},
-                           we_finetuned=True,  # @param {type:"boolean"},
-                           sentence_embedding=False, utility='AOPC', delta=.1, pred_threshold=0.01, k=5, batch_size=256,
-                           explanation=''):
-        model_name = 'BERT'
-        model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
-        routine, predictor = self.init_routine(dataset_name, reset_files, reset_networks, we_finetuned,
-                                               sentence_embedding, chunk_size=batch_size)
-        self.routine = routine
-        self.predictor = predictor
-        test_df = routine.test_merged.copy().replace(pd.NA, '')
+    def evaluate_single_df(self, dataset_name: str='', dataset_df: pd.DataFrame=None, 
+                           utility: Union[str, bool]='AOPC', k: int=5, explanation: str='',
+                           evaluate_positive: Union[str, bool]='all'):
+
+        if evaluate_positive not in ('all', '', True, False):
+            raise ValueError(f"evaluate_positive parameter is invalid ({evaluate_positive}).")
+
+        if dataset_name and dataset_df:
+            raise ValueError("Specifying a dataset name is incorrect if a DataFrame is passed.")
+
+        if dataset_name and dataset_name != self.dataset_name:
+            self.update_settings(dataset_name=dataset_name)
+
+        if dataset_df:
+            self.update_settings(dataset_df=dataset_df)
+
         if explanation == 'LIME':
-            pos_exp, neg_exp = self.load_explanations(turn_dataset_name=dataset_name, conf=explanation)
-            match_ids = pos_exp.id.unique()
-            no_match_ids = neg_exp.id.unique()
-            decision_unit_view = False
-            res_df, ev = self.evaluate_df(pos_exp,
-                                          test_df[test_df.id.isin(match_ids)],
-                                          predictor, score_col='impact', k=k, decision_unit_view=decision_unit_view,
-                                          utility=utility)
-            self.calculate_save_metric(res_df, model_files_path, metric_name=utility, suffix=explanation)
+            self.load_explanations(conf=explanation)
 
-            res_df, ev = self.evaluate_df(neg_exp,
-                                          test_df[test_df.id.isin(no_match_ids)],
-                                          predictor, score_col='impact', k=k, decision_unit_view=decision_unit_view,
-                                          utility=utility)
-            self.ev = ev
-            self.calculate_save_metric(res_df, model_files_path, metric_name=utility, prefix='no_match',
+            if self.evaluate_removing_du:
+                print("Warning: evaluation with LIME does not accept evaluating using Decision Unit. "
+                      "Ignoring parameter evaluate_removing_du.")
+            self.evaluate_removing_du = False
+
+            self._evaluate_df(utility=utility, k=k)
+
+            self.calculate_save_metric(self.pos_res_df, self.model_files_path, metric_name=utility, suffix=explanation)
+            self.calculate_save_metric(self.neg_res_df, self.model_files_path, metric_name=utility, prefix='no_match',
                                        suffix=explanation)
         else:
-            decision_unit_view = True
-            remove_decision_unit_only = False
-            df_name = 'test'
-            pred, features, word_relevance = routine.get_calculated_data(df_name)
-            df = routine.test_merged.copy().replace(pd.NA, '')
             if 'decision_unit_flat' in explanation:
-                word_relevance = self.explanation_from_decision_unit_to_token(df, word_relevance)
-                decision_unit_view = False
+                if self.evaluate_removing_du:
+                    print("Warning: required explanation with decision_unit_flat, but evaluation with Decision Units is "
+                          "required. Ignoring parameter evaluate_removing_du.")
+                self.evaluate_removing_du = False
+
             elif 'remove_du_only' in explanation:
-                remove_decision_unit_only = True
-                predictor = partial(routine.get_predictor(remove_decision_unit_only=True), return_data=False, lr=True,
-                                    chunk_size=batch_size, reload=True)
+                if self.recompute_embeddings:
+                    print("Warning: required explanation with remove_du_only, but it is required to recompute the word "
+                          "embeddings. Ignoring parameter recompute_embeddings and updating the predictor.")
+                self.recompute_embeddings = False
 
-            match_df, match_ids, no_match_df, no_match_ids = self.get_match_no_match_df(df, pred, delta=delta,
-                                                                                        pred_threshold=pred_threshold)
+                self.predictor = partial(self.routine.get_predictor(recompute_embeddings=False), return_data=False, lr=True,
+                                    chunk_size=self.batch_size, reload=True)
 
-            # predictor = lambda x : [0.5]*x.shape[0]
-            print('Before')
+            print('Evaluating data.')
 
-            res_df, ev = self.evaluate_df(word_relevance[word_relevance.id.isin(match_ids)],
-                                          match_df[match_df.id.isin(match_ids)],
-                                          predictor, score_col='token_contribution', k=k, utility=utility,
-                                          decision_unit_view=decision_unit_view,
-                                          remove_decision_unit_only=remove_decision_unit_only
-                                          )
-            self.ev = ev
-            self.calculate_save_metric(res_df, model_files_path, metric_name=utility, suffix=explanation)
-            # assert False
-            if utility == 'AOPC':
-                return
+            self._evaluate_df(utility=utility, k=k, evaluate_positive=evaluate_positive)
 
-            res_df, ev = self.evaluate_df(word_relevance[word_relevance.id.isin(no_match_ids)],
-                                          no_match_df[no_match_df.id.isin(no_match_ids)],
-                                          predictor, score_col='token_contribution', k=k, utility=utility,
-                                          decision_unit_view=decision_unit_view,
-                                          remove_decision_unit_only=remove_decision_unit_only
-                                          )
-            self.ev = ev
-            self.calculate_save_metric(res_df, model_files_path, metric_name=utility, prefix='no_match',
-                                       suffix=explanation)
+            if evaluate_positive:
+                self.calculate_save_metric(self.pos_res_df, self.model_files_path, metric_name=utility,
+                                           suffix=explanation)
 
-    def load_explanations(self, turn_dataset_name, conf='LIME'):
-        base_files_path = os.path.join(self.project_path, 'dataset_files')
-        turn_files_path = os.path.join(base_files_path, turn_dataset_name, 'wym')
+            if evaluate_positive == 'all' or not evaluate_positive:
+                self.calculate_save_metric(self.neg_res_df, self.model_files_path, metric_name=utility,
+                                           prefix='no_match', suffix=explanation)
 
-        tmp_path = os.path.join(turn_files_path, f'negative_explanations_{conf}.csv')
-        neg_exp = pd.read_csv(tmp_path)
-        tmp_path = os.path.join(turn_files_path, f'positive_explanations_{conf}.csv')
-        pos_exp = pd.read_csv(tmp_path)
+            if evaluate_positive == 'all':
+                return self.pos_res_df, self.pos_ev, self.neg_res_df, self.neg_ev
+
+            elif evaluate_positive:
+                return self.pos_res_df, self.pos_ev
+
+            else:
+                return self.neg_res_df, self.neg_ev
+
+    def _evaluate_df(self, conf_name: str= 'bert', utility: Union[str, bool]= 'AOPC', k: int=5,
+                     evaluate_positive: Union[str, bool]='all'):
+
+        ## ids = list(self.dataset.id.unique())
+        print(f'Testing unit removal with -- {self.score_col}')
+
+        if evaluate_positive:
+
+            print("Evaluating positive examples.")
+
+            self.pos_res_df = self.pos_ev.evaluate_impacts(utility=utility, k=k)
+            self.pos_res_df['conf'] = conf_name
+
+            if utility == 'AOPC':  # applicable only on positive examples, don't evaluate negatives
+                print("AOPC utility is applicable only on positive examples.")
+
+        if not evaluate_positive or evaluate_positive == 'all':
+            print("Evaluating negative examples.")
+
+            self.neg_res_df = self.neg_ev.evaluate_impacts(utility=utility, k=k)
+            self.neg_res_df['conf'] = conf_name
+
+        return self.pos_res_df, self.neg_res_df
+
+    def load_explanations(self, conf='LIME'):
+        neg_exp_path = os.path.join(self.model_files_path, f'negative_explanations_{conf}.csv')
+        pos_exp_path = os.path.join(self.model_files_path, f'positive_explanations_{conf}.csv')
+        neg_exp = pd.read_csv(neg_exp_path)
+        pos_exp = pd.read_csv(pos_exp_path)
         print('Loaded explanations')
-        return pos_exp, neg_exp
 
-    def init_routine(self, dataset_name="Amazon-Google", reset_files=False,
-                     reset_networks=False,  # @param {type:"boolean"},
-                     we_finetuned=True,  # @param {type:"boolean"},
-                     sentence_embedding=False, chunk_size=128, model_name="BERT", **kwargs):
-        # @param ["wym"]
-        softlab_path = self.softlab_path
-        dataset_path = os.path.join(self.softlab_path, 'Dataset', 'Entity Matching', dataset_name)
+        self.match_ids = pos_exp.id.unique()
+        self.no_match_ids = neg_exp.id.unique()
+        self.match_df = self.dataset[self.dataset.id.isin(self.match_ids)]
+        self.no_match_df = self.dataset[self.dataset.id.isin(self.no_match_ids)]
 
-        from wym.BERTRoutine import Routine
-        finetuned_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name, 'sBERT')
+        self.pos_impacts_df = pos_exp
+        self.neg_impacts_df = neg_exp
 
-        routine = Routine(dataset_name, dataset_path, self.project_path, reset_files=reset_files,
-                          reset_networks=reset_networks, softlab_path=softlab_path, model_name=model_name,
-                          we_finetuned=we_finetuned, we_finetune_path=finetuned_path,
-                          sentence_embedding=sentence_embedding, device='cuda', **kwargs
-                          )
+        self.pos_ev.update_settings(impacts_df=self.match_df)
+        self.neg_ev.update_settings(impacts_df=self.no_match_df)
+
+    def init_routine(self, **kwargs):
+
+        routine = Routine(self.dataset_name, self.dataset_path, self.project_path, reset_files=self.reset_files,
+                          reset_networks=self.reset_networks, softlab_path=self.softlab_path, model_name=self.model_name,
+                          we_finetuned=self.we_finetuned, we_finetune_path=self.we_finetuned_path,
+                          sentence_embedding=self.sentence_embedding, device='cuda', **kwargs)
+
         routine.additive_only = self.additive_only
-        routine.generate_df_embedding(chunk_size=chunk_size)
+        routine.generate_df_embedding(chunk_size=self.batch_size)
         _ = routine.compute_word_pair()
 
         _ = routine.net_train(
@@ -310,7 +698,9 @@ class WYMevaluation(SoftlabEnv):
                                  routine.test_merged,
                                  do_feature_selection=False)
 
-        predictor = partial(routine.get_predictor(), return_data=False, lr=True, chunk_size=chunk_size, reload=True)
+        predictor = partial(routine.get_predictor(), return_data=False, lr=True, chunk_size=self.batch_size,
+                            reload=True)
+
         return routine, predictor
 
     def generate_explanation_LIME(self, **kwargs):
@@ -325,8 +715,7 @@ class WYMevaluation(SoftlabEnv):
                                        ):
         model_name = 'BERT'
         model_files_path = os.path.join(self.project_path, 'dataset_files', dataset_name, model_name)
-        routine, predictor = self.init_routine(dataset_name, reset_files, reset_networks, we_finetuned,
-                                               sentence_embedding, verbose=True, chunk_size=batch_size)
+        routine, predictor = self.init_routine(verbose=True)
         test_df = routine.test_merged.copy().replace(pd.NA, '')
         explainer = Landmark(predictor, test_df,
                              exclude_attrs=self.excluded_cols + ['label', 'id'], lprefix='left_', rprefix='right_',
@@ -355,52 +744,95 @@ class WYMevaluation(SoftlabEnv):
 
 
 if __name__ == "__main__":
-    ev = WYMevaluation()
-    ev.evaluate_single_df('iTunes-Amazon', utility=True, explanation='to_delete', reset_files=False)
+    utility = 'degradation'
+    variable_side='all'
+    fixed_side='all'
+    explanation = 'LIME'
+    dataset_name = 'iTunes-Amazon'
+    evaluate_removing_du = True
+    wym_ev = WYMEvaluation(dataset_name, evaluate_removing_du=evaluate_removing_du, recompute_embeddings=True,
+                           variable_side=variable_side, fixed_side=fixed_side)
+    pos_results_df, pos_ev_expl, neg_results_df, neg_ev_expl = wym_ev.evaluate_single_df(utility=utility,
+                                                                                     explanation='last')
 
-    exit(0)
+    # wym_ev = WYMEvaluation('BeerAdvo-RateBeer', evaluate_removing_du=False, recompute_embeddings=True,
+    #                        variable_side='all')
+    # pos_results_df, pos_ev_expl, neg_results_df, neg_ev_expl = wym_ev.evaluate_single_df(utility=utility,
+    #                                                                                      explanation=explanation)
+    print(pos_results_df)
 
-    # Look in '''Evaluation explanation + General training wym''' for more
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--task", type=str, default="Structured/Beer")
+    pos_ev_expl.generate_counterfactual_examples()
 
-    ev = WYMevaluation()
-    ev.evaluate_all_df(utility='AOPC', explanation='last')
+    def generate_negative_dataset_ad_hoc():
+        dataset_with_pred = neg_ev_expl.dataset.copy()
+        preds_per_id = pd.DataFrame(columns=['id', 'start_pred'])
 
-    ev = WYMevaluation()
-    ev.evaluate_all_df(utility='sufficiency', explanation='last')
+        for index, id_ in enumerate(dataset_with_pred.id.unique()):
+            preds_per_id = pd.concat(
+                [preds_per_id, pd.DataFrame({'id': id_, 'start_pred': neg_ev_expl.start_pred[index]}, index=[0])],
+                ignore_index=True)
 
-    ev = WYMevaluation()
-    # ev.evaluate_all_df(utility='degradation', reset_files=True, reset_networks=True, explanation='improved')
-    # ev.evaluate_all_df(utility='degradation', explanation='decision_unit_flat', batch_size=512)
-    ev.evaluate_all_df(utility='degradation', explanation='last', batch_size=512)
+        dataset_with_pred = dataset_with_pred.merge(preds_per_id, on='id')
+        dataset_with_pred = dataset_with_pred.sort_values('start_pred', ascending=False)
 
-    # ev = WYMevaluation()
-    # ev.evaluate_all_df(explanation='decision_unit_flat_last')
+        low_pred_df = dataset_with_pred[dataset_with_pred['start_pred'] < 0.1]
+        low_pred_df = low_pred_df.drop(columns=['start_pred']).sort_index()
+        low_pred_impacts_df = neg_ev_expl.impacts_df[neg_ev_expl.impacts_df.id.isin(low_pred_df.id)]
 
-    # ev = WYMevaluation()
-    # ev.evaluate_all_df(utility='degradation', explanation='remove_du_only')
+        # in una versione tolgo nome, in una nome album
+        # versione 1
 
-    # ev = WYMevaluation(additive_only=True)
-    # ev.additive_only = True
-    # ev.evaluate_all_df(utility='degradation', explanation='additive_only')
+        def delete_artist_name(row_):
+            if row_['left_attribute'] == 'Artist_Name':
+                row_['left_word'] = ''
 
-    # ev = WYMevaluation()
-    # ev.generate_explanation_LIME() # LIME
-    #
-    # ev = WYMevaluation()
-    # ev.evaluate_all_df(utility='sufficiency', explanation='LIME')
-    # ev = WYMevaluation()
-    # ev.evaluate_all_df(utility='degradation', explanation='LIME')
+            return row_
 
-    # DITTOevaluation().evaluate_all_df(utility='sufficiency')
-    # DITTOevaluation().evaluate_all_df(utility='AOPC')
-    # DITTOevaluation().evaluate_all_df(utility='degradation')
+        def generate_description_from_side_attributes(df_row, side='left'):
+            if side not in ('left', 'right'):
+                raise ValueError("Wrong side value")
 
-    # print('-' * 10 + '>' * 5 + 'decision_unit_flat_proportional' + '<' * 5 + '-' * 10)
-    # ev = WYMevaluation()
-    # ev.evaluate_all_df(utility='degradation', explanation='decision_unit_flat_proportional', batch_size=512)
-    #
-    # print('-' * 10 + '>' * 5 + 'proportional' + '<' * 5 + '-' * 10)
-    # ev = WYMevaluation()
-    # ev.evaluate_all_df(utility='degradation', explanation='proportional', batch_size=512)
+            return ' '.join(
+                [str(df_row[key]) for key in df_row.keys() if
+                 key.startswith(f'{side}_') and
+                 df_row[key] is not np.nan and
+                 key not in (f'{side}_id', f'{side}_description')])
+
+        def split_left_and_right_word_prefixes(group_df):
+            encoded_left_desc = group_df[group_df['column'].str.startswith('left_')]['word_prefix'].to_list()
+            encoded_right_desc = group_df[group_df['column'].str.startswith('right_')]['word_prefix'].to_list()
+            return pd.Series([[encoded_left_desc, encoded_right_desc]], index=['encoded_descs'])
+
+        low_pred_df_no_name = low_pred_df.copy()
+        low_pred_df_no_name['left_Song_Name'] = [''] * low_pred_df_no_name.shape[0]
+
+        low_pred_impacts_df_no_name = low_pred_impacts_df.apply(delete_artist_name, axis=1)
+
+        neg_ev_expl.update_settings(dataset=low_pred_df_no_name, impacts_df=low_pred_impacts_df_no_name)
+        neg_ev_expl.evaluate_impacts()
+
+        tmp = neg_ev_expl.res_df.merge(neg_ev_expl.dataset, on='id')
+        tmp = tmp.loc[tmp.groupby(['id'])['num_tokens'].idxmax()]
+
+        cpd = tmp.copy()
+        cpd['left_Song_Name'] = tmp['right_Song_Name']
+
+        cpd['left_description'] = cpd.apply(generate_description_from_side_attributes, axis=1)
+        cpd['right_description'] = cpd.apply(generate_description_from_side_attributes, side='right', axis=1)
+        encoded_descriptions = neg_ev_expl.variable_mapper.encode_elements(cpd).groupby('id').apply(
+            split_left_and_right_word_prefixes)
+
+        cpd = cpd.merge(encoded_descriptions, on='id').sort_values('new_pred', ascending=False)
+
+        return cpd
+
+    cpd = generate_negative_dataset_ad_hoc()
+    neg_ev_expl.counterfactuals_plotting_data = cpd[0:10]
+    neg_ev_expl.plot_counterfactual()
+
+    if not os.path.exists('./evaluation_tables'):
+        os.makedirs("./evaluation_tables")
+
+    with open(f"./evaluation_tables/counterfactuals_{wym_ev.dataset_name}_utility_{utility}_exp_{explanation}.html",
+              'w') as html_file:
+        html_file.write(pos_ev_expl.plot_counterfactual())

@@ -30,7 +30,7 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader
 from tqdm.autonotebook import tqdm
-from Landmark_github.evaluation.Evaluate_explanation_Batch import evaluate_df, correlation_vs_landmark, token_remotion_delta_performance
+from Landmark_github.evaluation.Evaluate_explanation_Batch import correlation_vs_landmark, token_removal_delta_performance
 from .FeatureContribution import FeatureContribution
 from .FeatureExtractor import FeatureExtractor
 from .Finetune import finetune_BERT
@@ -322,9 +322,9 @@ class Routine:
                     tmp_path = os.path.join(self.model_files_path, df_name + 'sentence_emb_pairs.csv')
                     with open(tmp_path, 'rb') as file:
                         self.sentence_emb_pairs_dict[df_name] = pickle.load(file)
-            print('Loaded word pairs')
-        except Exception as e:
-            print(e)
+            print('Loaded word pairs.')
+        except FileNotFoundError as e:
+            print(f"File {e.filename} not found. Recomputing...")
 
             if word_sim:
                 word_pair_generator = WordPairGeneratorEdit(df=self.test_merged, use_schema=use_schema, device=self.device,
@@ -595,7 +595,6 @@ class Routine:
 
         self.timing_models = pd.DataFrame(time_list_dict)
 
-        print('before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
         try:
@@ -737,10 +736,10 @@ class Routine:
 
         return feat, word_pairs
 
-    def get_predictor(self, remove_decision_unit_only=False):
+    def get_predictor(self, recompute_embeddings=True):
         self.reset_networks = False
         self.net_train()
-        if remove_decision_unit_only is False:
+        if recompute_embeddings:
             def predictor(df_to_process, routine, return_data=False, lr=False, chunk_size=500, reload=False,
                           additive_only=self.additive_only):
 
@@ -860,14 +859,14 @@ class Routine:
         no_match_ids = no_match_df.id.sample(sample_len).values
         self.ev_df['nomatch'] = no_match_df[no_match_df.id.isin(no_match_ids)]
         if 0 in operations:
-            # token_remotion_delta_performance
+            # token_removal_delta_performance
             tmp_path = os.path.join(self.model_files_path, 'results',
                                     f'{score_col}__evaluation_token_remotion_delta_performance.csv')
             if reset is False and os.path.isfile(tmp_path):
                 delta_performance = pd.read_csv(tmp_path)
             else:
-                delta_performance = token_remotion_delta_performance(df, df.label.values.astype(int), word_relevance,
-                                                                     predictor, plot=plot, score_col=score_col)
+                delta_performance = token_removal_delta_performance(df, df.label.values.astype(int), word_relevance,
+                                                                    predictor, plot=plot, score_col=score_col)
                 delta_performance.to_csv(
                     tmp_path)
             display(delta_performance)
@@ -880,10 +879,12 @@ class Routine:
                     os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_no_match_mean_delta.csv')):
                 pass
             else:
+                # TODO: edit this branch to use _evaluate_df from WYM correctly
+                from wym.run_experiments.wym_evaluation import WYMEvaluation
+                ev = WYMEvaluation(dataset_df=df, evaluate_removing_du=True, recompute_embeddings=True,
+                                   variable_side='all', fixed_side='all')
                 # Evaluate impacts with words remotion
-                res_df = evaluate_df(word_relevance[word_relevance.id.isin(match_ids)],
-                                     match_df[match_df.id.isin(match_ids)],
-                                     predictor, score_col=score_col)
+                res_df = ev._evaluate_df()
 
                 res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
                 self.experiments['exp1_match'] = res_df
@@ -896,9 +897,7 @@ class Routine:
                 match_stat.to_csv(
                     os.path.join(self.model_files_path, 'results', f'{score_col}__evaluation_match_mean_delta.csv'))
 
-                res_df = evaluate_df(word_relevance[word_relevance.id.isin(no_match_ids)],
-                                     no_match_df[no_match_df.id.isin(no_match_ids)],
-                                     predictor, score_col=score_col)
+                res_df = ev._evaluate_df()
                 res_df['concorde'] = (res_df['detected_delta'] > 0) == (res_df['expected_delta'] > 0)
                 self.experiments['exp1_no_match'] = res_df
                 no_match_stat = res_df.groupby('comb_name')[['concorde']].mean()
@@ -980,12 +979,14 @@ class Routine:
         return word_relevance  # res_df_match, res_df_no_match, delta_performance, correlation_data
 
     @staticmethod
-    def plot_token_contribution(el_df, score_col='token_contribution', cut=0.1):
-        plt.rcParams.update({'font.size': 8})
+    def plot_token_contribution(el_df, score_col: str='token_contribution', cut: float=0.1, bar_fontsize: int=8,
+                                y_fontsize: int=9):
+        original_fontsize = plt.rcParams.get('font.size')
+        plt.rcParams.update({'font.size': bar_fontsize})
 
         tmp_df = el_df.copy()
         tmp_df = tmp_df.set_index(['left_word', 'right_word'])
-        tmp_df = tmp_df[tmp_df[score_col].abs() >= cut]
+        tmp_df = tmp_df[(tmp_df[score_col]).abs() >= cut]
         # colors = ['orange' ] * tmp_df.shape[0]
         colors = np.where(tmp_df[score_col] >= 0, 'green', 'red')
 
@@ -1005,10 +1006,12 @@ class Routine:
             plt.ylabel('')
 
         g.grid(axis='y', color='0.7')
-        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=9)
+        g.axes.set_yticklabels(g.axes.get_yticklabels(), fontsize=y_fontsize)
         yticks = g.get_yticks()
         for y0, y1 in zip(yticks[::2], yticks[1::2]):
             g.axhspan(y0, y1, color='0.7', alpha=0.1, zorder=0)
         g.set_yticks(yticks)  # force the same yticks again
         plt.tight_layout()
         plt.show()
+
+        plt.rcParams.update({'font.size': original_fontsize})
