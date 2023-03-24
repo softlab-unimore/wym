@@ -22,11 +22,31 @@ exec(open(os.path.join(project_path,'notebook_import_utility_env.py')).read())
 
 import os
 import sys
-from .import_utility import check_pathc_exist, prefix
+
 import pandas as pd
 import numpy as np
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.display import display, HTML
+
+def check_pathc_exist(path):
+    if not os.path.exists(path):
+        print(f"Missing path. Expected path: {path}")
+        sys.exit(1)
+
+
+prefix = ''
+if '/home/' in os.path.expanduser('~'):  # UNI env
+    prefix = os.path.expanduser('~')
+else:
+    # install here for colab env
+    # !pip install lime
+    # !pip install -q spacy
+    # !pip install -q pytorch-lightning
+    # !pip install -q transformers
+    # !pip install -q -U sentence-transformers
+    # !pip install -U nltk
+    # !pip install pyyaml==5.4.1
+    prefix = '/'
 
 softlab_path = os.path.join(prefix, 'content/drive/Shareddrives/SoftLab')
 project_path = os.path.join(softlab_path, 'Projects', 'WYM')
@@ -52,10 +72,12 @@ for path in [softlab_path, project_path, dataset_path, model_files_path, base_fi
     check_pathc_exist(path)
 
 sys.path.append(os.path.join(project_path, 'common_functions'))
-sys.path.append(os.path.join(project_path, 'notebooks' if 'baraldian' in prefix else 'notebooks giacomo'))
+# sys.path.append(os.path.join(project_path, 'notebooks' if 'baraldian' in prefix else 'notebooks giacomo'))
+# sys.path.append(os.path.join(project_path, 'notebooks'))
 sys.path.append(os.path.join(project_path, 'src'))
 sys.path.append(os.path.join(project_path, 'src', 'BERT'))
-
+# sys.path.append(os.path.join(project_path, 'wym_github', 'wym'))
+sys.path.append(os.path.join(project_path, 'wym_github'))
 sys.path = list(set(sys.path))
 
 # pandas and numpy setup
@@ -71,6 +93,7 @@ InteractiveShell.ast_node_interactivity = "all"  # Display all statements
 excluded_cols = ['id', 'left_id', 'right_id']
 
 import seaborn as sns
+import matplotlib.pyplot as plt
 
 sns.set()  # for plot styling
 sns.set(rc={"figure.dpi": 200, 'savefig.dpi': 400})
