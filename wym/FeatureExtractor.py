@@ -89,7 +89,7 @@ class FeatureExtractor(FeatureExtractorGeneral):
         # all_stat.columns = all_stat.columns + f'_allattr'
         # return pd.concat([tmp_stat, all_stat], 1).fillna(null_value)
 
-        return pd.concat(stat_list, 1).fillna(null_value).sort_index()
+        return pd.concat(stat_list, axis=1).fillna(null_value).sort_index()
 
     @staticmethod
     def extract_features_simplified(word_pairs_df: pd.DataFrame, complementary=True, pos_threshold=.5, null_value=0,

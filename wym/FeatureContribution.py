@@ -149,7 +149,7 @@ class FeatureContribution(FeatureContributionGeneral):
         tmp_stat.columns = tmp_stat.columns + f'_allattr'
         stat_list.append(tmp_stat)
         joined_df = word_pairs_df[['id']].join(stat_list).fillna(null_value)
-        return joined_df.drop('id', 1)
+        return joined_df.drop('id', axis=1)
 
     @staticmethod
     def cycle_features(df_stat_suffix_list, features, rs_col='pred', use_softmax='proportional'):
@@ -240,7 +240,7 @@ class FeatureContribution(FeatureContributionGeneral):
         unpaired_stat.columns += '_unpaired'
         FeatureContribution.cycle_features([[com_df, paired_stat, '_paired'], [non_com_df, unpaired_stat, '_unpaired']],
                                            features=function_names)
-        contribution_df = pd.concat([com_df, non_com_df], 0).sort_index().fillna(0)
+        contribution_df = pd.concat([com_df, non_com_df], axis=0).sort_index().fillna(0)
 
         stat = FeatureContribution().compute_derived_features(contribution_df, function_names, possible_unpaired=[''],
                                                               additive_only=additive_only)

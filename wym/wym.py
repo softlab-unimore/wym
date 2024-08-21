@@ -57,10 +57,10 @@ class Wym:
         self.we = WordEmbedding(device=self.device, verbose=True, model_path=we_finetune_path)
         self.feature_extractor = FeatureExtractor()
 
-    def spilt_X_y(self, df, label_column_name='label'):
+    def split_x_y(self, df, label_column_name='label'):
         return df[self.columns_to_use], df[label_column_name]
 
-    def get_processed_data(self, df, batch_size=None, verbose=False):
+    def get_processed_data(self, df: pd.DataFrame, batch_size: int = None, verbose: bool = False):
         if hasattr(self, 'batch_size'):
             batch_size = self.batch_size
         we = self.we

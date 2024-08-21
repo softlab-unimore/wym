@@ -1,6 +1,8 @@
 import gc
+from typing import Tuple, Union, List
 
 import numpy as np
+import pandas as pd
 import torch
 from tqdm.autonotebook import tqdm
 from transformers import BertModel, BertTokenizer
@@ -10,11 +12,12 @@ import copy
 def check_memory():
     print('GPU memory: %.1f MB' % (torch.cuda.memory_allocated() // 1024 ** 2))
 
+
 class WordEmbedding():
 
     def __init__(self, device='auto', verbose=False, model_path='bert-base-uncased', sentence_embedding=False):
         self.sentence_embedding = sentence_embedding
-        self.model = BertModel.from_pretrained(model_path, output_hidden_states=True) # , from_flax=True
+        self.model = BertModel.from_pretrained(model_path, output_hidden_states=True)  # , from_flax=True
         # Set the device to GPU (cuda) if available, otherwise stick with CPU
         if device == 'auto':
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -25,7 +28,7 @@ class WordEmbedding():
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.verbose = verbose
 
-    def get_word_embeddings(self, sentences):
+    def get_word_embeddings(self, sentences: List[float]):
         tokens = self.tokenizer(sentences, padding=True, return_tensors='pt')
         detected_tokens = [self.tokenizer.convert_ids_to_tokens(x) for x in tokens['input_ids']]
         token_emb = self.get_token_embeddings(tokens)
@@ -127,7 +130,7 @@ class WordEmbedding():
         else:
             return None
 
-    def get_embedding_df(self, df):
+    def get_embedding_df(self, df: pd.DataFrame) -> Union[Tuple[np.array, list], Tuple[np.array, list, np.array]]:
         columns = np.setdiff1d(df.columns, ['id'])
         df = df.replace('None', np.nan).replace('nan', np.nan)
         sentences = df[columns].apply(WordEmbedding.get_words_to_embed, 1)
@@ -169,7 +172,8 @@ class WordEmbedding():
         else:
             return emb_all, words_cut
 
-    def generate_embedding(self, df, chunk_size=500):
+    def generate_embedding(self, df: pd.DataFrame, chunk_size: int = 500) -> Union[
+        Tuple[list, list, list], Tuple[list, list]]:
         emb_list, words_list, sent_emb_list = [], [], []
         n_chunk = np.ceil(df.shape[0] / chunk_size).astype(int)
         torch.cuda.empty_cache()
