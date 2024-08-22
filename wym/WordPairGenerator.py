@@ -6,8 +6,10 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm.autonotebook import tqdm
-from .StableMarriage import gale_shapley
+from typing import List
 
+from .StableMarriage import gale_shapley
+from nltk.metrics.distance import jaro_winkler_similarity
 
 class EMFeatures:
     def __init__(self, df, exclude_attrs=('id', 'left_id', 'right_id', 'label'), device='cuda', n_proc=1):
@@ -32,7 +34,7 @@ class WordPairGenerator(EMFeatures):
                        'right_attribute': []}
     unpair_threshold = 0.6
     cross_attr_threshold = .65
-    duplicate_threshold = .75 #.85 #1.1  # .75 #TODO adjust duplicate threshold
+    duplicate_threshold = .75  # .85 #1.1  # .75 #TODO adjust duplicate threshold
 
     def __init__(self, words=None, embeddings=None, words_divided=None, use_schema=True, sentence_embedding_dict=None,
                  unpair_threshold=None, cross_attr_threshold=None, duplicate_threshold=None,
@@ -95,7 +97,6 @@ class WordPairGenerator(EMFeatures):
             tmp_word['id'] = [el.id.values[0]] * n_pairs
             word_dict_list.append(tmp_word)
             embedding_list.append(tmp_emb)
-
 
         keys = word_dict_list[0].keys()
         ret_dict = {key: np.concatenate([x[key] for x in word_dict_list]) for key in keys}
@@ -473,7 +474,7 @@ class WordPairGenerator(EMFeatures):
                     word_pair[key] = np.concatenate(
                         [word_pair[key], np.array(tmp_word_pairs[key])[side_mask].flatten()])
                     # display(word_pair[key], '***',np.concatenate([word_pair[key], np.array(tmp_word_pairs[key])[side_mask]]))
-                if len(pairs) >0:
+                if len(pairs) > 0:
                     all_attr = [pos_to_attr_map[pos] for pos in pairs[side_mask][:, 1 if all_side == 'right' else 0]]
                     word_pair[all_side + '_attribute'] = np.concatenate([word_pair[all_side + '_attribute'], all_attr])
                     unp_attr = np.array(unpaired_words[unp_side + '_attribute'])[
@@ -500,7 +501,7 @@ class WordPairGenerator(EMFeatures):
             return word_pair, emb_pair
 
     @staticmethod
-    def map_word_to_attr(df, cols, prefix='', verbose=False):
+    def map_word_to_attr(df: pd.DataFrame, cols: List[str], prefix: str = '', verbose: bool = False) -> List[dict]:
         tmp_res = []
 
         if verbose:
@@ -518,7 +519,6 @@ class WordPairGenerator(EMFeatures):
         return tmp_res
 
 
-from nltk.metrics.distance import jaro_winkler_similarity
 class WordPairGeneratorEdit(WordPairGenerator):
 
     def __init__(self, *args, **kwargs):
