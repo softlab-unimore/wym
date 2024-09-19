@@ -51,12 +51,13 @@ class DatasetAccoppiate(Dataset):
         tmp_word_pairs = word_pairs.copy()
         tmp_word_pairs['cos_sim'] = torch.cosine_similarity(embedding_pairs[:, 0, :].cpu(),
                                                             embedding_pairs[:, 1, :].cpu())
-        tmp_word_pairs['label_corrected'] = tmp_word_pairs['label']
+        tmp_word_pairs['label_corrected'] = tmp_word_pairs['label'].astype(float)
         tmp_word_pairs.loc[
             (tmp_word_pairs.cos_sim >= min_sim_pair) & (tmp_word_pairs.label == 0), 'label_corrected'] = .5
         tmp_word_pairs.loc[
             (tmp_word_pairs.cos_sim < max_sim_unpair) & (tmp_word_pairs.label == 1), 'label_corrected'] = .5
         df = tmp_word_pairs
+        df = df.astype({'label': float, 'cos_sim': float, 'label_corrected': float})
         grouped = df.groupby(['left_word', 'right_word'], as_index=False).agg(
             {'label': ['mean'], 'cos_sim': ['mean'], 'label_corrected': ['mean']}).droplevel(1, 1)
         df = df.drop('label_corrected_mean', 1) if 'label_corrected_mean' in df.columns else df

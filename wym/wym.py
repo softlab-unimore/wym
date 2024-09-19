@@ -182,12 +182,12 @@ class Wym:
                                                   [y_train, y_valid]):
                 df_pred[turn_name] = model.predict(turn_df)
                 for score_name, scorer in [['f1', f1_score], ['precision', precision_score], ['recall', recall_score]]:
-                    score_value = scorer(turn_y, df_pred[turn_name])
+                    score_value = scorer(turn_y.astype(int), df_pred[turn_name].astype(int))
                     res[(turn_name, score_name)].append(score_value)
                     # if turn_name == 'test' and score_name == 'f1':
                     #     print(f'{name:<10}-{score_name} {score_value}')
 
-        print('before feature selection')
+        print('Before feature selection')
         res_df = pd.DataFrame(res, index=model_names)
         res_df.index.name = 'model_name'
         best_f1 = res_df[('valid', 'f1')].max()
@@ -248,8 +248,16 @@ class Wym:
         self.feature_model = model_data['model']
         self.best_features = model_data['features']
 
+    @staticmethod
+    def df_clean_non_ascii(df: pd.DataFrame):
+        for col in df.columns:
+            df[col] = df[col].apply(lambda x: x.encode('ascii', 'ignore').decode('ascii', 'ignore').lower() if isinstance(x, str) else x)
+        return df
+
     def fit(self, X: pd.DataFrame, y, valid_X=None, valid_y=None):
         X = X.copy()
+        X = self.df_clean_non_ascii(X)    
+        valid_X = self.df_clean_non_ascii(valid_X)
         X['label'] = y
         res_dict = self.get_processed_data(X, batch_size=self.batch_size)
         word_pairs, emb_pairs = self.get_word_pairs(X, res_dict)
@@ -274,10 +282,13 @@ class Wym:
         self.EM_modelling(X_train=features, y_train=y, X_valid=valid_features, y_valid=valid_y)
 
     def predict(self, X, lr=True, reload=False, return_data=False):
+        X = X.copy()
+        X = self.df_clean_non_ascii(X)    
         df_to_process = X.copy()
-        if 'id' not in df_to_process.columns:
-            df_to_process = df_to_process.reset_index(drop=True)
-            df_to_process['id'] = df_to_process.index
+        if 'id' in df_to_process.columns:
+            df_to_process.rename(columns={'id': 'old_id'}, inplace=True)
+        df_to_process.reset_index(drop=True, inplace=True)
+        df_to_process['id'] = df_to_process.index
 
         data_dict = self.get_processed_data(df_to_process)
         word_pairs, emb_pairs = self.get_word_pairs(X, data_dict)
@@ -285,6 +296,7 @@ class Wym:
         features = self.extract_features(word_relevance)
 
         match_score = self.get_match_score(features, lr=lr, reload=reload)
+        
         match_score_series = pd.Series(0.5, index=df_to_process.id)
         match_score_series[features.index] = match_score
         match_score = match_score_series.values
@@ -334,7 +346,9 @@ class Wym:
             g.axhspan(y0, y1, color='0.7', alpha=0.1, zorder=0)
         g.set_yticks(yticks)  # force the same yticks again
         plt.tight_layout()
+        #plt.savefig(str("graph.png"), dpi=600)
         plt.show()
+        return plt.gcf()
 
 
 if __name__ == '__main__':

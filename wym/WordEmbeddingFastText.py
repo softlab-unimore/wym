@@ -64,7 +64,7 @@ class WordEmbeddingFastText():
 
     def get_embedding_df(self, df):
         columns = np.setdiff1d(df.columns, ['id'])
-        df = df.replace('None', np.nan).replace('nan', np.nan)
+        #df = df.replace('None', np.nan).replace('nan', np.nan)
         sentences = df[columns].apply(WordEmbeddingFastText.get_words_to_embed, 1)
         not_None_sentences = [x for x in sentences if x is not None]
         if len(not_None_sentences) > 0:

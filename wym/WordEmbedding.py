@@ -101,7 +101,7 @@ class WordEmbedding():
             split_pos = 0
             while split_pos < len(words_splitted):
                 tmp_word += words_list[word_pos]
-                # print(f'{tmp_word} -- {words_splitted[split_pos]}, {tmp_word == words_splitted[split_pos]}')
+                #print(f'{tmp_word} -- {words_splitted[split_pos]}, {tmp_word == words_splitted[split_pos]}')
                 new_words_map[split_pos] += words_map[word_pos]
                 if tmp_word == words_splitted[split_pos]:
                     split_pos += 1
@@ -132,7 +132,7 @@ class WordEmbedding():
 
     def get_embedding_df(self, df: pd.DataFrame) -> Union[Tuple[np.array, list], Tuple[np.array, list, np.array]]:
         columns = np.setdiff1d(df.columns, ['id'])
-        df = df.replace('None', np.nan).replace('nan', np.nan)
+        #df = df.replace('None', np.nan).replace('nan', np.nan)
         sentences = df[columns].apply(WordEmbedding.get_words_to_embed, 1)
         not_None_sentences = [x for x in sentences if x is not None]
         # display(not_None_sentences)

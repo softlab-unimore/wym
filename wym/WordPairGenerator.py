@@ -63,7 +63,7 @@ class WordPairGenerator(EMFeatures):
         if 'id' not in df.columns:
             df['id'] = df.index
         if self.verbose:
-            print('generating word_pairs')
+            print('Generating word_pairs')
             to_cycle = tqdm(range(df.shape[0]))
         else:
             to_cycle = range(df.shape[0])
