@@ -126,14 +126,20 @@ class Wym:
             print('Save...')
             torch.save(best_model.state_dict(), tmp_path)
 
+        dataloader_path = os.path.join(self.model_files_path, 'dataloader.pickle')
+        with open(dataloader_path, 'wb') as f:
+            pickle.dump(self.train_data_loader, f)
         self.word_pair_model = best_model
         return best_model
 
     def relevance_score(self, word_pairs, emb_pairs):
         self.word_pair_model.eval()
         self.word_pair_model.to(self.device)
-        data_loader = self.train_data_loader
-        data_loader.__init__(word_pairs, emb_pairs)
+        try:
+            data_loader = self.train_data_loader
+            data_loader.__init__(word_pairs, emb_pairs)
+        except Exception as e:
+            raise FileNotFoundError("The dataloader was not found. You should call .fit() first")
         word_pair_corrected = data_loader.word_pairs_corrected
         with torch.no_grad():
             word_pair_corrected['pred'] = self.word_pair_model(data_loader.X.to(self.device)).cpu().detach().numpy()
@@ -247,6 +253,20 @@ class Wym:
                 model_data = self.best_model_data
         self.feature_model = model_data['model']
         self.best_features = model_data['features']
+
+        tmp_path = os.path.join(self.model_files_path, 'net.pickle')
+        best_model = NetAccoppiate()
+        best_model.load_state_dict(torch.load(tmp_path, map_location=torch.device(self.device)))
+        self.word_pair_model = best_model
+        dataloader_path = os.path.join(self.model_files_path, 'dataloader.pickle')
+        try:
+            with open(dataloader_path, 'rb') as f:
+                self.train_data_loader = pickle.load(f)
+        except FileNotFoundError as e:
+            print("The dataloader file was not found")
+            print(e)
+        
+        
 
     @staticmethod
     def df_clean_non_ascii(df: pd.DataFrame):
