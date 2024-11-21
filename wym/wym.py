@@ -34,10 +34,12 @@ from .WordPairGenerator import WordPairGenerator
 
 
 class Wym:
-    def __init__(self, df: pd.DataFrame, we_finetune_path='bert-base-uncased', device='auto',
-                 exclude_attrs=['id', 'left_id', 'right_id', 'label'],
-                 column_prefixes=['left_', 'right_'], reset_networks=False, model_files_path='wym',
-                 batch_size=256, epochs=40, verbose=True):
+    def __init__(self, df: pd.DataFrame, we_finetune_path: str = 'bert-base-uncased', device: str = 'auto',
+                 exclude_attrs: list = ['id', 'left_id', 'right_id', 'label'],
+                 column_prefixes: list = ['left_', 'right_'], reset_networks: bool = False,
+                 model_files_path: str = 'wym',
+                 batch_size: int = 256, epochs: int = 40, verbose: bool = True):
+
         self.columns_to_use = np.setdiff1d(df.columns, exclude_attrs)
         self.cols = pd.Series(self.columns_to_use.copy())
         self.cols = self.cols[self.cols.str.startswith(column_prefixes[0])].str.replace(column_prefixes[0], '')
@@ -59,7 +61,14 @@ class Wym:
         self.we = WordEmbedding(device=self.device, verbose=True, model_path=we_finetune_path)
         self.feature_extractor = FeatureExtractor()
 
-    def split_x_y(self, df, label_column_name='label'):
+        self.train_data_loader = None
+        self.word_pair_model = None
+        self.feature_model = None
+        self.best_linear_model_data = None
+        self.best_features = None
+        self.best_model_data = None
+
+    def split_x_y(self, df: pd.DataFrame, label_column_name: str = 'label'):
         return df[self.columns_to_use], df[label_column_name]
 
     def get_processed_data(self, df: pd.DataFrame, batch_size: int = None, verbose: bool = False):
@@ -80,7 +89,7 @@ class Wym:
             res[side + '_words'] = words
         return res
 
-    def get_word_pairs(self, df, data_dict, use_schema=True, **kwargs):
+    def get_word_pairs(self, df: pd.DataFrame, data_dict: dict, use_schema: bool = True, **kwargs):
         wp = WordPairGenerator(df=df, use_schema=use_schema, device=self.device, verbose=self.verbose,
                                **kwargs)
         res = wp.get_word_pairs(df, data_dict)
@@ -88,8 +97,9 @@ class Wym:
         word_pairs = pd.DataFrame(word_pairs)
         return word_pairs, emb_pairs
 
-    def net_train(self, train_word_pairs=None, train_emb_pairs=None, valid_word_pairs=None, valid_emb_pairs=None,
-                  num_epochs=40, lr=3e-5, batch_size=256, ):
+    def net_train(self, train_word_pairs: pd.DataFrame = None, train_emb_pairs: torch.Tensor = None,
+                  valid_word_pairs: pd.DataFrame = None, valid_emb_pairs: torch.Tensor = None,
+                  num_epochs: int = 40, lr: float = 3e-5, batch_size: int = 256):
 
         data_loader = DatasetAccoppiate(train_word_pairs, train_emb_pairs)
         self.train_data_loader = data_loader
@@ -134,28 +144,29 @@ class Wym:
         self.word_pair_model = best_model
         return best_model
 
-    def relevance_score(self, word_pairs, emb_pairs):
+    def relevance_score(self, word_pairs: pd.DataFrame, emb_pairs: pd.DataFrame):
         self.word_pair_model.eval()
         self.word_pair_model.to(self.device)
         try:
             data_loader = self.train_data_loader
             data_loader.__init__(word_pairs, emb_pairs)
-        except Exception as e:
+        except Exception:
             raise FileNotFoundError("The dataloader was not found. You should call .fit() first")
         word_pair_corrected = data_loader.word_pairs_corrected
         with torch.no_grad():
             word_pair_corrected['pred'] = self.word_pair_model(data_loader.X.to(self.device)).cpu().detach().numpy()
         return word_pair_corrected
 
-    def extract_features(self, word_pair, **kwargs):
+    def extract_features(self, word_pair: pd.DataFrame, **kwargs):
         features = self.feature_extractor.extract_features_by_attr(word_pair, self.cols, **kwargs)
         return features
 
-    def EM_modelling(self, X_train, y_train, X_valid, y_valid,
-                     do_evaluation=False, do_feature_selection=False, results_path='results'):
+    def EM_modelling(self, X_train: pd.DataFrame, y_train: pd.Series, X_valid: pd.DataFrame, y_valid: pd.Series,
+                     results_path: str = 'results'):
         if self.additive_only and results_path == 'results':
             results_path = 'results_additive'
-        if hasattr(self, 'models') == False:
+
+        if not hasattr(self, 'models'):
             mmScaler = MinMaxScaler()
             mmScaler.clip = False
             self.models = [
@@ -181,8 +192,7 @@ class Wym:
 
         res = {(x, y): [] for x in ['train', 'valid'] for y in ['f1', 'precision', 'recall']}
         df_pred = {}
-        time_list_dict = []
-        time_dict = {}
+
         for name, model in tqdm(self.models):
             model.fit(X_train.values, y_train)
 
@@ -226,7 +236,7 @@ class Wym:
         with open(tmp_path, 'wb') as file:
             pickle.dump(model_data, file)
 
-    def get_match_score(self, features_df, lr=False, reload=False):
+    def get_match_score(self, features_df: pd.DataFrame, lr: bool = False, reload: bool = False):
         self.load_model(lr=lr, reload=reload)
         X = features_df[self.best_features].to_numpy()
         if isinstance(self.feature_model, Pipeline) and isinstance(self.feature_model[0], MinMaxScaler):
@@ -238,7 +248,7 @@ class Wym:
         match_score = match_score_series.values
         return match_score
 
-    def load_model(self, lr=False, reload=False):
+    def load_model(self, lr: bool = False, reload: bool = False):
         if lr is True:
             if not hasattr(self, 'best_linear_model_data') or reload:
                 tmp_path = os.path.join(self.model_files_path, 'linear_model.pickle')
@@ -267,18 +277,20 @@ class Wym:
         except FileNotFoundError as e:
             print("The dataloader file was not found")
             print(e)
-        
-        
 
     @staticmethod
     def df_clean_non_ascii(df: pd.DataFrame):
         for col in df.columns:
-            df[col] = df[col].apply(lambda x: x.encode('ascii', 'ignore').decode('ascii', 'ignore').lower() if isinstance(x, str) else x)
+            df[col] = df[col].apply(
+                lambda x: (
+                    x.encode('ascii', 'ignore').decode('ascii', 'ignore').lower()
+                    if isinstance(x, str) else x
+                ))
         return df
 
-    def fit(self, X: pd.DataFrame, y, valid_X=None, valid_y=None):
+    def fit(self, X: pd.DataFrame, y: pd.Series, valid_X: pd.DataFrame = None, valid_y: pd.Series = None):
         X = X.copy()
-        X = self.df_clean_non_ascii(X)    
+        X = self.df_clean_non_ascii(X)
         valid_X = self.df_clean_non_ascii(valid_X)
         X['label'] = y
         res_dict = self.get_processed_data(X, batch_size=self.batch_size)
@@ -304,9 +316,9 @@ class Wym:
 
         self.EM_modelling(X_train=features, y_train=y, X_valid=valid_features, y_valid=valid_y)
 
-    def predict(self, X, lr=True, reload=False, return_data=False):
+    def predict(self, X: pd.DataFrame, lr: bool = True, reload: bool = False, return_data: bool = False):
         X = X.copy()
-        X = self.df_clean_non_ascii(X)    
+        X = self.df_clean_non_ascii(X)
         df_to_process = X.copy()
         if 'id' in df_to_process.columns:
             df_to_process.rename(columns={'id': 'old_id'}, inplace=True)
@@ -319,7 +331,7 @@ class Wym:
         features = self.extract_features(word_relevance)
 
         match_score = self.get_match_score(features, lr=lr, reload=reload)
-        
+
         match_score_series = pd.Series(0.5, index=df_to_process.id)
         match_score_series[features.index] = match_score
         match_score = match_score_series.values
@@ -338,7 +350,7 @@ class Wym:
             return match_score
 
     @staticmethod
-    def plot_token_contribution(el_df, score_col='token_contribution', cut=0.1):
+    def plot_token_contribution(el_df: pd.DataFrame, score_col: str = 'token_contribution', cut: float = 0.1):
         plt.rcParams.update({'font.size': 8, "figure.figsize": (18, 6)})
 
         tmp_df = el_df.copy()
@@ -369,7 +381,7 @@ class Wym:
             g.axhspan(y0, y1, color='0.7', alpha=0.1, zorder=0)
         g.set_yticks(yticks)  # force the same yticks again
         plt.tight_layout()
-        #plt.savefig(str("graph.png"), dpi=600)
+        # plt.savefig(str("graph.png"), dpi=600)
         plt.show()
         return plt.gcf()
 
