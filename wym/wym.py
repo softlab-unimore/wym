@@ -311,7 +311,7 @@ class Wym:
         df_to_process['id'] = df_to_process.index
 
         data_dict = self.get_processed_data(df_to_process)
-        word_pairs, emb_pairs = self.get_word_pairs(X, data_dict)
+        word_pairs, emb_pairs = self.get_word_pairs(df_to_process, data_dict)
         word_relevance = self.relevance_score(word_pairs, emb_pairs)
         features = self.extract_features(word_relevance)
 
