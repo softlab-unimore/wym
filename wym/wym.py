@@ -37,12 +37,13 @@ class Wym:
     def __init__(self, df: pd.DataFrame, we_finetune_path='bert-base-uncased', device='auto',
                  exclude_attrs=['id', 'left_id', 'right_id', 'label'],
                  column_prefixes=['left_', 'right_'], reset_networks=False, model_files_path='wym',
-                 batch_size=256, verbose=True):
+                 batch_size=256, epochs=40, verbose=True):
         self.columns_to_use = np.setdiff1d(df.columns, exclude_attrs)
         self.cols = pd.Series(self.columns_to_use.copy())
         self.cols = self.cols[self.cols.str.startswith(column_prefixes[0])].str.replace(column_prefixes[0], '')
         self.lp = column_prefixes[0]
         self.rp = column_prefixes[1]
+
         if device is None or device == 'auto':
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -50,6 +51,7 @@ class Wym:
         os.makedirs(self.model_files_path, exist_ok=True)
         self.reset_networks = reset_networks
         self.batch_size = batch_size
+        self.epochs = epochs
         self.verbose = verbose
         self.additive_only = False
 
@@ -292,7 +294,8 @@ class Wym:
         _ = self.net_train(train_word_pairs=word_pairs,
                            train_emb_pairs=emb_pairs,
                            valid_word_pairs=valid_word_pairs,
-                           valid_emb_pairs=valid_emb_pairs)
+                           valid_emb_pairs=valid_emb_pairs,
+                           num_epochs=self.epochs)
         word_relevance = self.relevance_score(word_pairs, emb_pairs)
         features = self.extract_features(word_relevance)
 
